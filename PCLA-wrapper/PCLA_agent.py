@@ -55,8 +55,10 @@ class PCLAAgentAV:
         else:
             self._pcla_root = Path(__file__).resolve().parent / "PCLA"
 
-        self._host = self._carla_cfg.get("host", "localhost")
-        self._port = int(self._carla_cfg.get("port", 2000))
+        self._host = os.environ.get("CARLA_HOST", self.config.get("host", "localhost"))
+
+        self._port = int(os.environ.get("CARLA_PORT", self.config.get("port", 2000)))
+
         self._timeout = float(self._carla_cfg.get("timeout", 10.0))
 
         self._carla_root = self._carla_cfg.get("carla_root") or os.environ.get(
@@ -77,6 +79,7 @@ class PCLAAgentAV:
         self._spawn_z_offset = float(self._carla_cfg.get("spawn_z_offset", 3.0))
         self._xodr_root = Path(self._carla_cfg.get("xodr_root", "/mnt/map/xodr"))
         self._carla_map_name = self._carla_cfg.get("carla_map_name", None)
+        self._max_retry_times = int(self._carla_cfg.get("max_retry_times", 10))
 
         self._original_settings = None
         self._spawned_actor_ids = set()
@@ -137,9 +140,16 @@ class PCLAAgentAV:
         self._ensure_carla_imports()
         if self._client is not None:
             return
+        logger.info("Connecting to CARLA server at %s:%s...", self._host, self._port)
         client = self._carla.Client(self._host, self._port)
-        client.set_timeout(self._timeout)
+        # Temporarily set a short timeout for the initial connection attempt
+        client.set_timeout(5.0)
+        world = client.get_world()
+        if world is None:
+            raise RuntimeError("Failed to connect to CARLA server")
         self._client = client
+        self._client.set_timeout(self._timeout)
+        logger.info("Connected to CARLA server at %s:%s", self._host, self._port)
 
     def _find_ego_vehicle_once(self):
         if self._world is None:
@@ -242,8 +252,19 @@ class PCLAAgentAV:
 
     def init(self, sps: ScenarioPack) -> None:
         self._sps = sps
-        self._connect()
-        logger.info("PCLAAgentAV initialized.")
+        for i in range(self._max_retry_times):
+            logger.info("Initializing CARLA world (attempt %d)...", i + 1)
+            try:
+                self._connect()
+                break
+            except Exception:
+                logger.exception("Failed to initialize CARLA world (attempt %d)", i + 1)
+                if i == self._max_retry_times - 1:
+                    raise RuntimeError(
+                        "Exceeded maximum retry attempts for CARLA connection"
+                    )
+                time.sleep(1.0)
+        logger.info("CarlaAgentAV initialized.")
 
     def reset(
         self,
