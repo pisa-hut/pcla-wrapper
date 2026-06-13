@@ -419,16 +419,27 @@ def test_carl_generates_bev_masks_for_dynamic_opendrive_maps():
     manager = Path(
         "PCLA-wrapper/PCLA/pcla_agents/carl/birds_eye_view/bev_observation.py"
     ).read_text(encoding="utf-8")
+    roach_manager = Path(
+        "PCLA-wrapper/PCLA/pcla_agents/carl/birds_eye_view/chauffeurnet.py"
+    ).read_text(encoding="utf-8")
     generator = Path(
         "PCLA-wrapper/PCLA/pcla_agents/carl/birds_eye_view/birdview_map_opencv.py"
     ).read_text(encoding="utf-8")
     agent = Path("PCLA-wrapper/PCLA/pcla_agents/carl/eval_agent.py").read_text(encoding="utf-8")
+    red_light = Path(
+        "PCLA-wrapper/PCLA/pcla_agents/carl/reward/criteria/run_red_light.py"
+    ).read_text(encoding="utf-8")
 
     assert "map_name != 'OpenDriveMap'" in manager
     assert "MapImage.draw_map_image(" in manager
     assert "precision=0.5" in manager
+    assert "map_name != 'OpenDriveMap'" in roach_manager
+    assert "MapImage.draw_map_image(" in roach_manager
+    assert "precision=0.5" in roach_manager
     assert "dtype=np.uint8" in generator
+    assert "from .traffic_light import TrafficLightHandler" in generator
     assert "if not self.initialized:" in agent
+    assert "assert TrafficLightHandler.num_tl > 0" not in red_light
 
 
 def test_neat_agents_use_world_route_in_native_coordinate_frame():
