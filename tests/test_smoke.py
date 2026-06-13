@@ -352,33 +352,21 @@ def test_duplicate_map_assets_are_deduplicated_in_the_image():
         "PCLA-wrapper/PCLA/pcla_agents/transfuserv5/birds_eye_view/maps_8ppm_cv/",
         "PCLA-wrapper/PCLA/pcla_agents/transfuserv5/birds_eye_view/maps_high_res/",
         "PCLA-wrapper/PCLA/pcla_agents/carl/birds_eye_view/maps_2ppm_cv/",
-        (
-            "PCLA-wrapper/PCLA/pcla_agents/transfuserv6/lead/expert/hdmap/"
-            "maps_2ppm_cv/"
-        ),
+        ("PCLA-wrapper/PCLA/pcla_agents/transfuserv6/lead/expert/hdmap/maps_2ppm_cv/"),
     )
     for path in duplicate_map_paths:
         assert path in dockerignore
 
     duplicate_speed_limit_paths = (
-        (
-            "PCLA-wrapper/PCLA/pcla_agents/plant2/carla_garage/speed_limits/"
-            "*_speed_limits.npy"
-        ),
+        ("PCLA-wrapper/PCLA/pcla_agents/plant2/carla_garage/speed_limits/*_speed_limits.npy"),
         "PCLA-wrapper/PCLA/pcla_agents/simlingo/speed_limits/*_speed_limits.npy",
-        (
-            "PCLA-wrapper/PCLA/pcla_agents/transfuserv5/speed_limits/"
-            "*_speed_limits.npy"
-        ),
+        ("PCLA-wrapper/PCLA/pcla_agents/transfuserv5/speed_limits/*_speed_limits.npy"),
     )
     for path in duplicate_speed_limit_paths:
         assert path in dockerignore
 
     assert "canonical_maps=/app/PCLA-wrapper/PCLA/pcla_agents/plant2/" in dockerfile
-    assert (
-        "canonical_speed_limits=/app/PCLA-wrapper/PCLA/pcla_agents/plant/"
-        in dockerfile
-    )
+    assert "canonical_speed_limits=/app/PCLA-wrapper/PCLA/pcla_agents/plant/" in dockerfile
 
 
 def test_plant_route_planner_uses_world_coordinates():
