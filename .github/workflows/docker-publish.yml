@@ -1,0 +1,168 @@
+name: Docker
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+#
+# PCLA ships its pretrained weights inside the image (the executor has no
+# per-AV weight mount), so this publishes the *common-bundled* image rather
+# than the slim base. The bundled build needs a separate staging context, so
+# it uses plain `docker build`/`docker push` instead of build-push-action.
+# Requires a self-hosted GPU runner that holds the full PCLA weights at
+# /opt/pcla-pretrained (same assumption as common-runtime.yml).
+
+on:
+  push:
+    branches: ["main"]
+    # Publish semver tags as releases.
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: docker.io
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, x64, gpu]
+
+    env:
+      # <dockerhub-namespace>/<repo-name>; namespace comes from the
+      # DOCKERHUB_USERNAME secret so the workflow works across forks.
+      IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+
+    permissions:
+      contents: read
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # The build needs PCLA/dist/carla-*.whl and PCLA/pcla_agents/**.
+          submodules: recursive
+
+      # Install the cosign tool except on PR
+      # https://github.com/sigstore/cosign-installer
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
+        with:
+          cosign-release: "v2.2.4"
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # OCI tags disallow '/'; slugify the same way docker/metadata-action
+      # does for type=ref,event=branch so feature-branch dispatches work.
+      - name: Compute image reference
+        id: ref
+        run: |
+          set -euo pipefail
+          REF_TAG="${{ github.ref_name }}"
+          REF_TAG="${REF_TAG//\//-}"
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "tag=${REF_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
+
+      # Runtime base image (code + deps + CARLA, no weights).
+      - name: Build common-slim
+        run: docker build --target common-slim -t pcla-wrapper:common-slim .
+
+      # Stage just the "common" profile weights (plant/plant2/carl) from the
+      # runner's weight root into an isolated build context.
+      - name: Stage common weights
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/pcla-common-weights"
+          python3 scripts/prepare_weight_profile.py \
+            --profile common \
+            --source /opt/pcla-pretrained \
+            --output "${RUNNER_TEMP}/pcla-common-weights"
+
+      # Bake the staged weights onto common-slim → the deployment image.
+      - name: Build common-bundled
+        run: |
+          set -euo pipefail
+          docker build \
+            -f docker/Dockerfile.bundled \
+            --build-arg BASE_IMAGE=pcla-wrapper:common-slim \
+            -t "${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.tag }}" \
+            "${RUNNER_TEMP}/pcla-common-weights"
+
+      # Push and capture the pushed digest (don't push on PR).
+      - name: Push image
+        id: push
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.tag }}"
+          docker push "${IMG}"
+          DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMG}" | cut -d@ -f2)"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      # Sign the published image digest except on PRs. This only writes to the
+      # public Rekor transparency log when the repo is public.
+      # https://github.com/sigstore/cosign
+      - name: Sign the published Docker image
+        if: github.event_name != 'pull_request'
+        env:
+          IMG: ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${IMG}@${DIGEST}"
+
+      # ─── Apptainer SIF build + push (oras://docker.io/<ns>/<repo>-sif) ─
+      # Builds the SIF from the image we just pushed (pinned by digest so we
+      # ship the exact bits), then pushes to a SIF-specific Docker Hub repo.
+      # Self-hosted runner is assumed to have apptainer pre-installed.
+      - name: Build and push Apptainer SIF
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          SIF_REPO="$(echo '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-sif' | tr '[:upper:]' '[:lower:]')"
+          DOCKER_PINNED="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+
+          cat > apptainer.def <<EOD
+          Bootstrap: docker
+          From: ${DOCKER_PINNED}
+
+          %startscript
+          #!/bin/bash
+          bash /app/entrypoint.sh
+          EOD
+
+          # Reuse the docker config that docker/login-action populated for the
+          # image push — apptainer's own `registry login` / `remote login` don't
+          # propagate creds to the OCI push code path on Docker Hub. Setting
+          # REGISTRY_AUTH_FILE makes the containers/image library that apptainer
+          # delegates to look at the same file the docker push used.
+          export REGISTRY_AUTH_FILE="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+
+          # 3 retries: the OCI layer fetch can hit transient
+          # `connection reset by peer` on the multi-GB layers.
+          # Apptainer's OCI cache keeps already-fetched layers
+          # across attempts, so retries are cheap.
+          for attempt in 1 2 3; do
+            if apptainer build wrapper.sif apptainer.def; then
+              break
+            fi
+            echo "apptainer build attempt $attempt failed; retrying"
+            sleep 5
+            [ "$attempt" = "3" ] && exit 1
+          done
+
+          apptainer push wrapper.sif "oras://${SIF_REPO}:${{ steps.ref.outputs.tag }}"
+          echo "SIF pushed: oras://${SIF_REPO}:${{ steps.ref.outputs.tag }}"
