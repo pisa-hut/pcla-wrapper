@@ -26,7 +26,11 @@ env:
 
 jobs:
   build:
-    runs-on: [self-hosted, linux, x64, gpu]
+    # No GPU needed: this job only builds + pushes images. The container is
+    # never run here (that's common-runtime.yml's job), and `docker build`
+    # RUN steps don't get GPU access anyway. Self-hosted is still required
+    # for apptainer (SIF) and the disk/network for the multi-GB build.
+    runs-on: self-hosted
 
     env:
       # <dockerhub-namespace>/<repo-name>; namespace comes from the
@@ -80,15 +84,21 @@ jobs:
       - name: Build common-slim
         run: docker build --target common-slim -t pcla-wrapper:common-slim .
 
+      # Fetch the official pretrained archive into the submodule's pcla_agents
+      # tree. .dockerignore keeps *_pretrained out of the slim context, so this
+      # only feeds the staging step below — not the slim build above.
+      - name: Download PCLA pretrained weights
+        run: bash scripts/download_pcla_pretrained.sh PCLA/pcla_agents
+
       # Stage just the "common" profile weights (plant/plant2/carl) from the
-      # runner's weight root into an isolated build context.
+      # downloaded archive into an isolated build context.
       - name: Stage common weights
         run: |
           set -euo pipefail
           rm -rf "${RUNNER_TEMP}/pcla-common-weights"
           python3 scripts/prepare_weight_profile.py \
             --profile common \
-            --source /opt/pcla-pretrained \
+            --source PCLA/pcla_agents \
             --output "${RUNNER_TEMP}/pcla-common-weights"
 
       # Bake the staged weights onto common-slim → the deployment image.
