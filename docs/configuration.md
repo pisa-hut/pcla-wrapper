@@ -112,7 +112,40 @@ When the wrapper service runs as root, only the CARLA child is dropped to
 | `yaw_offset_deg` | `0.0` | Constant heading offset in degrees. |
 
 All sign values must be non-zero and are normalized to `+1` or `-1`. PISA yaw
-and yaw rate are always interpreted as radians.
+and yaw rate are always interpreted as radians. `coordinate_y_sign` and
+`yaw_sign` must be equal so position and 3-D orientation use one consistent
+handedness conversion.
+
+## Observation Geometry Profile
+
+PCLA shadow actors support `BOUNDING_BOX` shapes. Dimensions are positive,
+finite full extents in metres; the center is an actor-local relative transform
+in metres/radians. Polygon and cylinder observations fail explicitly.
+
+CARLA vehicle assets cannot be resized through the Python API. For each
+observed box, the wrapper deterministically selects the same-type blueprint
+whose native full dimensions have the lowest normalized 3-D error, then aligns
+that native box with `Shape.center`. The requested/native dimensions and error
+are logged once per mapping. Cameras, LiDAR and physics therefore use the
+nearest available CARLA asset and may not exactly match the requested box.
+
+## Canonical Control Contract
+
+Control follows the canonical simcore `THROTTLE_STEER_BREAK` contract in
+`runner/docs/data-contracts/README.md`; this wrapper does not define a private
+AV/simulator profile. It emits exactly three finite numeric keys:
+
+| Key | Canonical range |
+| --- | --- |
+| `throttle` | `[0, 1]` |
+| `brake` | `[0, 1]` |
+| `steer` | `[-1, 1]`, positive left |
+
+`steer_sign` converts PCLA's native CARLA-oriented output to the canonical
+positive-left boundary convention. If brake is positive, throttle is set to
+zero. Missing, nonnumeric, non-finite, or out-of-range fields fail explicitly;
+values are never silently clipped. The payload key is `brake`; the historical
+wire enum spelling remains `THROTTLE_STEER_BREAK`.
 
 ## Legacy Nested Form
 
