@@ -18,8 +18,10 @@ For example, Init base `/mnt/output` and Reset path `concrete` produce
 
 Values are resolved in this order:
 
-1. Environment overrides: `PCLA_AGENT`, `PCLA_ROUTE`, `CARLA_HOST`,
-   `CARLA_PORT`, and `CARLA_TIMEOUT`.
+1. Environment overrides: `PCLA_AGENT`, `PCLA_ROUTE`,
+   `PCLA_PRETRAINED_ROOT`, `CARLA_HOST`, `CARLA_PORT`, `CARLA_TIMEOUT`,
+   `CARLA_HOME`, and `CARLA_ROOT`. `CARLA_TM_PORT` configures the internal
+   Traffic Manager port and has no flat config equivalent.
 2. Flat `InitRequest.config` keys.
 3. Legacy nested `pcla:` and `carla:` keys.
 4. Wrapper defaults.
@@ -33,11 +35,13 @@ values, Init fails with `InvalidAvRequest`.
 | --- | --- | --- |
 | `pcla_agent` | `carl_plant_3` | Registry name `<family>_<variant>[_seed]`. |
 | `pcla_root` | Repository PCLA submodule | Directory containing `PCLA.py` and `agents.json`. |
+| `pcla_pretrained_root` | `/opt/pcla-pretrained` | Root containing validated PCLA weight profiles. |
 | `pcla_runtime_dir` | `<reset output>/pcla_runtime` | Writable working directory for upstream agent code. |
 | `route_xml_path` | `null` | Existing route XML, or generate one from scenario start/goal. |
 | `route_waypoint_distance` | `2.0` | Route planner sampling distance in meters. |
 | `route_draw` | `false` | Draw route debug markers in CARLA. |
 | `action_none_timeout_seconds` | `0.0` | Retry window when PCLA returns no action. |
+| `debug_log_interval_steps` | `20` | Driving-state debug log interval; `0` disables these debug logs. |
 
 `route_xml_path` is resolved relative to `pcla_root` unless it is absolute.
 Generated routes are written below
@@ -78,7 +82,7 @@ read-only path.
 | Key | Default | Description |
 | --- | --- | --- |
 | `sync` | `true` | Use CARLA synchronous mode. |
-| `no_rendering` | `false` | Disable rendering for sensorless agents; camera sensors override it to `false`. |
+| `no_rendering` | `true` | Disable rendering initially; camera sensors automatically switch it to `false`. |
 | `sensor_warmup_ticks` | `1` | CARLA ticks after sensor attachment and before initial inference. |
 | `xodr_root` | `/mnt/map/xodr` | OpenDRIVE map directory. |
 | `reuse_generated_world` | `true` | Reuse an unchanged generated map between resets. |

@@ -711,7 +711,7 @@ class PclaAV:
     def _ensure_carla_imports(self) -> None:
         if self._carla is not None:
             return
-        carla_root = self.config.get("carla_root") or os.environ.get("CARLA_ROOT")
+        carla_root = os.environ.get("CARLA_ROOT") or self.config.get("carla_root")
         carla_api = self.config.get("carla_egg")
         entries: list[Path] = []
         if carla_root:

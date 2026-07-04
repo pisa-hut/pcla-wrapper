@@ -1,34 +1,146 @@
-# Backward-compatible filename for the canonical flat PCLA wrapper config.
-# See config_example.yaml for all supported keys and docs/configuration.md for
-# precedence, validation, and legacy nested-config behavior.
+# PCLA Wrapper configuration example.
+# This mapping is passed as pisa-api InitRequest.config; the wrapper does not
+# automatically load this file. InitRequest.dt/output_dir and
+# ResetRequest.output_dir are lifecycle fields and are not configured here.
+
+# ---------------------------------------------------------------------------
+# PCLA agent, weights, and runtime
+# ---------------------------------------------------------------------------
+
+# PCLA registry name in <family>_<variant>[_seed] format. The family/variant
+# must exist in PCLA/agents.json. PCLA_AGENT overrides this value.
 pcla_agent: carl_plant_3
+
+# Directory containing PCLA.py and agents.json.
 pcla_root: /app/PCLA
+
+# Root of the validated pretrained-weight profile. Both slim and bundled
+# Docker images use /opt/pcla-pretrained. Slim mounts weights there; bundled
+# copies them into the image. The Docker entrypoint rejects another path.
+# PCLA_PRETRAINED_ROOT overrides this value.
+pcla_pretrained_root: /opt/pcla-pretrained
+
+# Writable working directory used while constructing, running, and cleaning
+# upstream PCLA code. null resolves to <Reset output_dir>/pcla_runtime.
+# A relative path is confined below the current Reset output directory.
 pcla_runtime_dir: null
+
+# Optional existing route XML. Relative paths resolve below pcla_root. null
+# generates a per-reset route from observation.ego to the scenario ego goal.
+# PCLA_ROUTE overrides this value.
 route_xml_path: null
+
+# Route-planner waypoint sampling distance in metres.
 route_waypoint_distance: 2.0
+
+# Draw generated route debug markers in the shadow CARLA world.
 route_draw: false
 
+# When PCLA returns no action, retry the same snapshot for at most this many
+# wall-clock seconds. 0 fails immediately without retrying or ticking CARLA.
+action_none_timeout_seconds: 0.0
+
+# Emit detailed driving-state DEBUG logs for steps 1-3 and then every N steps.
+# Set 1 for every step or 0 to disable these logs.
+debug_log_interval_steps: 20
+
+# ---------------------------------------------------------------------------
+# CARLA process, connection, and local Python API
+# ---------------------------------------------------------------------------
+
+# Launch and own a CARLA server process. Set false when connecting to an
+# externally managed server. Stop/finalize never terminates an external server.
 launch_carla_server: true
+
+# Executable used only when launch_carla_server is true.
+carla_server_script: /app/carla_server.sh
+
+# CARLA RPC endpoint. CARLA_HOST and CARLA_PORT override these values.
+carla_host: localhost
+carla_port: 2000
+
+# Total Init connection retry window and delay between attempts, in seconds.
 carla_connect_timeout_seconds: 30.0
 retry_interval_seconds: 2.0
+
+# Legacy fallback used only when carla_connect_timeout_seconds is omitted:
+# effective timeout = max_retry_times * 2 seconds.
+max_retry_times: 15
+
+# Normal CARLA RPC timeout after connection, in seconds. CARLA_TIMEOUT
+# overrides this value.
 carla_timeout: 10.0
+
+# Writable HOME used by CARLA navigation/cache code. CARLA_HOME overrides it.
 carla_home: /mnt/output/.carla-home
 
+# Local-development fallbacks for finding the CARLA Python API. Docker images
+# already install the CARLA wheel, so normal deployments should omit them.
+# carla_root points to a full CARLA installation; CARLA_ROOT overrides it.
+# carla_egg directly names a .whl or .egg and has no environment alias.
+# carla_root: null
+# carla_egg: null
+
+# ---------------------------------------------------------------------------
+# Shadow CARLA world and actors
+# ---------------------------------------------------------------------------
+
+# Use synchronous mode with InitRequest.dt as fixed_delta_seconds. Recommended
+# and required for deterministic runner operation.
 sync: true
-no_rendering: false
+
+# Start CARLA with rendering disabled for performance. If the selected PCLA
+# agent attaches camera sensors, the wrapper automatically enables rendering.
+no_rendering: true
+
+# CARLA ticks after attaching sensors and before initial inference.
 sensor_warmup_ticks: 1
-debug_log_interval_steps: 20
+
+# Directory containing <ScenarioPack.map_name>.xodr files.
 xodr_root: /mnt/map/xodr
+
+# Reuse a generated OpenDRIVE world when map name and resolved .xodr path are
+# unchanged. Set false if a map file can be replaced in place between resets.
 reuse_generated_world: true
+
+# Force TrafficManager asynchronous during cleanup. Leave false unless this
+# wrapper also manages TrafficManager synchronous actors.
 manage_traffic_manager_sync: false
 
+# CARLA role_name assigned to the shadow ego. PCLA/Leaderboard expects hero.
+# This is not the OpenSCENARIO ScenarioObject.name or pisa-api entity_name.
 ego_role_name: hero
+
+# Preferred ego blueprint when the observation has no shape. With a bounding
+# box shape, the wrapper deterministically chooses the closest-size compatible
+# CARLA blueprint instead.
 ego_bp_id: vehicle.tesla.model3
+
+# Temporary vertical offset used for collision-resistant actor spawning. The
+# actor is then teleported to the exact observation pose before the world tick.
 spawn_z_offset: 3.0
 
+# ---------------------------------------------------------------------------
+# Canonical PISA to native CARLA coordinate/control conversion
+# ---------------------------------------------------------------------------
+
+# PISA uses +y left and positive counter-clockwise yaw; CARLA uses +y right.
+# coordinate_y_sign and yaw_sign must be equal and are normally both -1.
 coordinate_y_sign: -1.0
 yaw_sign: -1.0
+
+# Convert native PCLA/CARLA steering to canonical PISA steering, where positive
+# means left. Normally -1 for CARLA-based agents.
 steer_sign: -1.0
+
+# Constant heading offset in degrees, applied after yaw_sign conversion.
 yaw_offset_deg: 0.0
-object_identity_mode: stateless
-action_none_timeout_seconds: 0.0
+
+# ---------------------------------------------------------------------------
+# Environment-only runtime settings (not InitRequest.config keys)
+# ---------------------------------------------------------------------------
+# CARLA_TM_PORT: TrafficManager cleanup port. Default: 8000
+# CARLA_NULLRHI: Explicit sensorless rendering mode for the owned server.
+# CARLA_QUALITY_LEVEL: Owned-server rendering quality.
+# CARLA_RUN_UID / CARLA_RUN_GID: UID/GID used for the owned CARLA child.
+# PCLA_IMAGE_PROFILE: Runtime image/weight profile name. Default: common

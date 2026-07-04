@@ -340,6 +340,24 @@ def test_server_uses_generic_pisa_service():
     assert "sbsvf_api" not in source
 
 
+def test_canonical_config_example_contains_current_keys_only():
+    config = Path("pcla_config.yaml").read_text(encoding="utf-8")
+    for key in (
+        "pcla_agent",
+        "pcla_pretrained_root",
+        "debug_log_interval_steps",
+        "carla_server_script",
+        "carla_host",
+        "carla_port",
+        "carla_root",
+        "carla_egg",
+        "no_rendering",
+    ):
+        assert f"{key}:" in config
+    assert "object_identity_mode:" not in config
+    assert "config_example.yaml" not in config
+
+
 def test_owned_carla_launcher_preserves_rendering_and_drops_root():
     source = Path("carla_server.sh").read_text(encoding="utf-8")
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
