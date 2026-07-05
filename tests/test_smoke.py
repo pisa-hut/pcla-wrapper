@@ -358,6 +358,24 @@ def test_canonical_config_example_contains_current_keys_only():
     assert "config_example.yaml" not in config
 
 
+def test_pcla_pseudosensor_emits_at_exact_frequency_boundary():
+    path = Path("PCLA/leaderboard_codes/sensor_interface.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_measurement_due"
+    )
+    namespace = {}
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    exec(compile(module, str(path), "exec"), namespace)
+    measurement_due = namespace["_measurement_due"]
+
+    assert measurement_due(0.05, 0.0, 20.0)
+    assert measurement_due(0.10, 0.05, 20.0)
+    assert not measurement_due(0.049, 0.0, 20.0)
+
+
 def test_owned_carla_launcher_preserves_rendering_and_drops_root():
     source = Path("carla_server.sh").read_text(encoding="utf-8")
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
