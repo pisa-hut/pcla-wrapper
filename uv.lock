@@ -138,7 +138,7 @@ wheels = [
 
 [[package]]
 name = "pcla-wrapper"
-version = "0.2.0"
+version = "0.3.0"
 source = { virtual = "." }
 dependencies = [
     { name = "pisa-api" },
@@ -153,7 +153,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pisa-api", git = "https://github.com/pisa-hut/pisa-api.git" }]
+requires-dist = [{ name = "pisa-api", git = "https://github.com/pisa-hut/pisa-api.git?rev=709d811ee605ffe84f5a34de98710bca10dfd611" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -163,8 +163,8 @@ dev = [
 
 [[package]]
 name = "pisa-api"
-version = "0.3.1"
-source = { git = "https://github.com/pisa-hut/pisa-api.git#133e09a02f5f214854485b725abb4c87d6d36907" }
+version = "0.4.0"
+source = { git = "https://github.com/pisa-hut/pisa-api.git?rev=709d811ee605ffe84f5a34de98710bca10dfd611#709d811ee605ffe84f5a34de98710bca10dfd611" }
 dependencies = [
     { name = "grpcio", version = "1.70.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "grpcio", version = "1.78.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },

@@ -36,7 +36,8 @@ Any partial failure triggers cleanup before the exception is returned.
 
 ## Step
 
-Step requires a non-empty observation with ego first. It:
+Step reads ego from `observation.ego` and non-ego actors from
+`observation.agents`. Agent list order is presentation-only. It:
 
 1. Synchronizes ego and non-ego shadow actors.
 2. Ticks or waits for CARLA exactly once.
@@ -44,6 +45,10 @@ Step requires a non-empty observation with ego first. It:
 4. Updates `CarlaDataProvider`.
 5. Passes that same snapshot to PCLA/GameTime.
 6. Returns `THROTTLE_STEER_BREAK`.
+
+Reset observation time is `0 ns`. Later Step timestamps must equal the absolute
+`step_index * Init.dt` grid. The wrapper gives PCLA an episode-relative snapshot
+timestamp, so reuse of a CARLA process does not leak elapsed time across resets.
 
 PCLA construction, action calls, and cleanup run with
 `<ResetRequest.output_dir>/pcla_runtime` as their temporary current working

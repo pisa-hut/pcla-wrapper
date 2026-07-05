@@ -173,17 +173,11 @@ For a PlanT config with `visualize: false`, `CARLA_NULLRHI=1` can run without
 X11. The launcher intentionally omits `-quality-level` in this mode because
 CARLA 0.9.16 exits with Signal 11 when NullRHI and a quality level are combined.
 
-## Non-Ego Actors Swap Identity
+## Non-Ego Actors Do Not Retain Identity
 
-Use:
-
-```yaml
-object_identity_mode: provided
-```
-
-and include one stable attribute per non-ego object: `id`, `object_id`,
-`track_id`, `external_id`, or `name`. Use `index` only when ordering is stable.
-The default `stateless` mode avoids identity swaps by rebuilding actors.
+Persistent shadow actors require every observed agent in the frame to carry a
+`tracking_id`. Frames with missing or mixed tracking IDs intentionally rebuild all
+non-ego actors; list position and `entity_name` are never used as identity.
 
 ## PCLA Returns No Action
 

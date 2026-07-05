@@ -2,6 +2,7 @@ import ast
 import importlib.util
 import inspect
 import json
+import math
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -13,7 +14,13 @@ from pisa_api.av import (
     AvUnavailable,
     ControlMode,
     InvalidAvRequest,
+    ObservationData,
+    ObservedAgentData,
     RoadObjectType,
+    ShapeCenterPoseData,
+    ShapeData,
+    ShapeDimensionData,
+    ShapeType,
     ShouldQuitResponse,
     StepResponse,
 )
@@ -51,8 +58,9 @@ class FakeVector:
 
 
 class FakeBlueprint:
-    def __init__(self, blueprint_id="vehicle.test"):
+    def __init__(self, blueprint_id="vehicle.test", dimensions=(4.0, 2.0, 1.5)):
         self.id = blueprint_id
+        self.dimensions = dimensions
         self.attributes = {}
 
     def has_attribute(self, name):
@@ -81,7 +89,7 @@ class FakeBlueprintLibrary:
 
 
 class FakeActor:
-    def __init__(self, actor_id, type_id="vehicle.test"):
+    def __init__(self, actor_id, type_id="vehicle.test", dimensions=(4.0, 2.0, 1.5)):
         self.id = actor_id
         self.type_id = type_id
         self.is_alive = True
@@ -89,6 +97,11 @@ class FakeActor:
         self.transforms = []
         self.physics_calls = []
         self.gravity_calls = []
+        self.bounding_box = SimpleNamespace(
+            location=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+            rotation=SimpleNamespace(roll=0.0, pitch=0.0, yaw=0.0),
+            extent=SimpleNamespace(x=dimensions[0] / 2, y=dimensions[1] / 2, z=dimensions[2] / 2),
+        )
 
     def destroy(self):
         self.destroy_calls += 1
@@ -161,7 +174,9 @@ class FakeWorld:
                 return None
             actor = result
         else:
-            actor = FakeActor(100 + len(self.actors))
+            actor = FakeActor(
+                100 + len(self.actors), blueprint.id, getattr(blueprint, "dimensions", (4, 2, 1.5))
+            )
         self.actors.append(actor)
         actor.spawn_transform = transform
         return actor
@@ -234,7 +249,17 @@ def fake_carla():
     )
 
 
-def kinematic(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0, yaw_rate=0.0):
+def kinematic(
+    x=0.0,
+    y=0.0,
+    z=0.0,
+    yaw=0.0,
+    speed=0.0,
+    yaw_rate=0.0,
+    time_ns=0,
+    acceleration=0.0,
+    yaw_acceleration=0.0,
+):
     return SimpleNamespace(
         x=x,
         y=y,
@@ -242,6 +267,9 @@ def kinematic(x=0.0, y=0.0, z=0.0, yaw=0.0, speed=0.0, yaw_rate=0.0):
         yaw=yaw,
         speed=speed,
         yaw_rate=yaw_rate,
+        time_ns=time_ns,
+        acceleration=acceleration,
+        yaw_acceleration=yaw_acceleration,
     )
 
 
@@ -249,6 +277,25 @@ def object_state(x=0.0, object_type=RoadObjectType.CAR, **extra):
     values = {"type": object_type, "kinematic": kinematic(x=x)}
     values.update(extra)
     return SimpleNamespace(**values)
+
+
+def observation(ego=None, agents=()):
+    return ObservationData(ego=ego or object_state(), agents=list(agents))
+
+
+def observed_agent(state=None, *, tracking_id=None, entity_name=None):
+    return ObservedAgentData(
+        state=state or object_state(), tracking_id=tracking_id, entity_name=entity_name
+    )
+
+
+def box_shape(dimensions=(4.0, 2.0, 1.5), **center):
+    return ShapeData(
+        type=ShapeType.BOUNDING_BOX,
+        dimensions=ShapeDimensionData(x=dimensions[0], y=dimensions[1], z=dimensions[2]),
+        center=ShapeCenterPoseData(**center),
+        reference_point="test_actor_origin",
+    )
 
 
 def configured_adapter(world=None):
@@ -265,11 +312,13 @@ def configured_adapter(world=None):
     adapter._yaw_sign = 1.0
     adapter._steer_sign = 1.0
     adapter._yaw_offset_deg = 0.0
-    adapter._object_identity_mode = "index"
     adapter._traffic_manager_port = 8000
     adapter._manage_traffic_manager_sync = False
     adapter._action_none_timeout = 0.0
     adapter._sensor_warmup_ticks = 0
+    adapter._fixed_delta_seconds = 0.05
+    adapter._dt_ns = 50_000_000
+    adapter._expected_timestamp_ns = 0
     adapter._pcla_runtime_dir = None
     adapter._vehicle = FakeActor(1)
     adapter._spawned_actor_ids = {1}
@@ -289,6 +338,24 @@ def test_server_uses_generic_pisa_service():
     assert 'serve_av_system(PclaAV(), name="PCLA")' in source
     assert "grpc.server" not in source
     assert "sbsvf_api" not in source
+
+
+def test_canonical_config_example_contains_current_keys_only():
+    config = Path("pcla_config.yaml").read_text(encoding="utf-8")
+    for key in (
+        "pcla_agent",
+        "pcla_pretrained_root",
+        "debug_log_interval_steps",
+        "carla_server_script",
+        "carla_host",
+        "carla_port",
+        "carla_root",
+        "carla_egg",
+        "no_rendering",
+    ):
+        assert f"{key}:" in config
+    assert "object_identity_mode:" not in config
+    assert "config_example.yaml" not in config
 
 
 def test_owned_carla_launcher_preserves_rendering_and_drops_root():
@@ -543,18 +610,10 @@ def test_flat_and_nested_config_are_compatible_and_conflicts_fail():
         adapter._normalize_config({"pcla_agent": "carl_plant_3", "pcla": {"agent": "carl_carl_1"}})
 
 
-def test_config_validation_for_agent_identity_sign_and_timeout(tmp_path):
+def test_config_validation_for_sign_and_timeout(tmp_path):
     root = tmp_path / "PCLA"
     write_agents(root)
     adapter = PclaAV()
-    adapter.config = {
-        "pcla_root": str(root),
-        "pcla_agent": "missing_agent",
-        "object_identity_mode": "bad",
-    }
-    with pytest.raises(InvalidAvRequest, match="object_identity_mode"):
-        adapter._parse_config()
-
     adapter.config = {"pcla_root": str(root), "coordinate_y_sign": 0}
     with pytest.raises(InvalidAvRequest, match="non-zero"):
         adapter._parse_config()
@@ -791,15 +850,14 @@ def test_connection_retry_uses_total_timeout(monkeypatch):
 @pytest.mark.parametrize(
     "scenario,observation,message",
     [
-        (None, [object_state()], "ScenarioPack"),
-        (SimpleNamespace(map_name="", ego=object()), [object_state()], "map_name"),
-        (SimpleNamespace(map_name="Town", ego=object()), [], "Initial observation"),
+        (None, observation(), "ScenarioPack"),
+        (SimpleNamespace(map_name="", ego=object()), observation(), "map_name"),
         (
             SimpleNamespace(
                 map_name="Town",
                 ego=SimpleNamespace(goal_config=SimpleNamespace(position=None)),
             ),
-            [object_state()],
+            observation(),
             "goal position",
         ),
     ],
@@ -849,12 +907,12 @@ def test_route_path_validation_and_output_isolation(tmp_path):
         ego=SimpleNamespace(goal_config=SimpleNamespace(position=kinematic(x=10))),
     )
     with pytest.raises(InvalidAvRequest, match="not readable"):
-        adapter._resolve_route_path(scenario, [object_state()])
+        adapter._resolve_route_path(scenario, observation())
 
     route = tmp_path / "route.xml"
     route.write_text("<route/>", encoding="utf-8")
     adapter._route_path_cfg = str(route)
-    assert adapter._resolve_route_path(scenario, [object_state()]) == route
+    assert adapter._resolve_route_path(scenario, observation()) == route
 
 
 def test_generated_route_logs_raw_converted_and_projected_endpoints(tmp_path, caplog):
@@ -882,7 +940,7 @@ def test_generated_route_logs_raw_converted_and_projected_endpoints(tmp_path, ca
     with caplog.at_level("INFO", logger="pcla_wrapper.pcla_av"):
         route = adapter._resolve_route_path(
             scenario,
-            [SimpleNamespace(kinematic=kinematic(x=2, y=4, z=1))],
+            observation(object_state(kinematic=kinematic(x=2, y=4, z=1))),
         )
     assert route.parent == tmp_path / "case-a" / "pcla_routes"
     assert ".." not in route.name
@@ -893,7 +951,7 @@ def test_generated_route_logs_raw_converted_and_projected_endpoints(tmp_path, ca
 
     adapter._pcla_module.location_to_waypoint = lambda *args, **kwargs: []
     with pytest.raises(AvPreconditionFailed, match="fewer than two"):
-        adapter._resolve_route_path(scenario, [object_state()])
+        adapter._resolve_route_path(scenario, observation())
 
 
 def test_pcla_constructor_uses_writable_runtime_and_restores_cwd(tmp_path):
@@ -1014,7 +1072,7 @@ def test_coordinate_yaw_yaw_rate_and_steer_conversion():
     assert (location.x, location.y, location.z) == (1.0, -2.0, 3.0)
     assert adapter._to_carla_yaw(3.141592653589793 / 2) == pytest.approx(-80.0)
     actor = FakeActor(1)
-    adapter._apply_kinematic(actor, kinematic(yaw_rate=1.0))
+    adapter._apply_state(actor, object_state(kinematic=kinematic(yaw_rate=1.0)))
     assert actor.angular_velocity.z == pytest.approx(-57.2957795)
 
     adapter._pcla = SimpleNamespace(
@@ -1022,7 +1080,7 @@ def test_coordinate_yaw_yaw_rate_and_steer_conversion():
     )
     adapter._data_provider = None
     adapter._vehicle = actor
-    response = adapter.step(SimpleNamespace(observation=[object_state()], timestamp_ns=5))
+    response = adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
     assert response.ctrl_cmd.payload["steer"] == pytest.approx(-0.4)
 
 
@@ -1034,7 +1092,7 @@ def test_extract_xyz_rejects_missing_or_non_numeric_fields():
         adapter._extract_xyz(SimpleNamespace(x="bad", y=2, z=3))
 
 
-def test_actor_identity_modes_disappearance_type_change_and_kinematic():
+def test_tracking_ids_preserve_identity_across_reorder_and_remove_disappeared():
     world = FakeWorld(
         FakeBlueprintLibrary(
             patterns={
@@ -1045,44 +1103,234 @@ def test_actor_identity_modes_disappearance_type_change_and_kinematic():
     )
     adapter = configured_adapter(world)
     ego = object_state()
-    first = object_state(1)
+    first = observed_agent(object_state(1), tracking_id=10)
+    second = observed_agent(object_state(2), tracking_id=20)
 
-    adapter._object_identity_mode = "index"
-    adapter._update_and_tick([ego, first])
-    actor = adapter._other_actors_by_key[("index", 0)]
-    adapter._update_and_tick([ego, first])
-    assert adapter._other_actors_by_key[("index", 0)] is actor
+    adapter._update_and_tick(observation(ego, [first, second]))
+    actor = adapter._other_actors_by_key[10]
+    second_actor = adapter._other_actors_by_key[20]
+    adapter._update_and_tick(observation(ego, [second, first]))
+    assert adapter._other_actors_by_key[10] is actor
+    assert adapter._other_actors_by_key[20] is second_actor
     assert actor.physics_calls[-1] is False
     assert actor.gravity_calls[-1] is False
     assert adapter._vehicle.physics_calls == []
 
-    changed = object_state(1, RoadObjectType.PEDESTRIAN)
-    adapter._update_and_tick([ego, changed])
-    replacement = adapter._other_actors_by_key[("index", 0)]
+    changed = observed_agent(object_state(1, RoadObjectType.PEDESTRIAN), tracking_id=10)
+    adapter._update_and_tick(observation(ego, [changed]))
+    replacement = adapter._other_actors_by_key[10]
     assert replacement is not actor
     assert actor.destroy_calls == 1
-    adapter._update_and_tick([ego])
+    assert second_actor.destroy_calls == 1
+    adapter._update_and_tick(observation(ego))
     assert replacement.destroy_calls == 1
 
 
-def test_stateless_and_provided_identity():
+def test_missing_or_mixed_tracking_ids_are_stateless_and_ignore_entity_name():
     adapter = configured_adapter()
     ego = object_state()
-    item = object_state(1, id="stable")
-    adapter._object_identity_mode = "stateless"
-    adapter._update_and_tick([ego, item])
-    first = adapter._other_actors_by_key[("frame", 0)]
-    adapter._update_and_tick([ego, item])
-    assert adapter._other_actors_by_key[("frame", 0)] is not first
+    unnamed = observed_agent(object_state(1))
+    named = observed_agent(object_state(2), tracking_id=7, entity_name="NPC")
+    adapter._update_and_tick(observation(ego, [unnamed, named]))
+    first_actors = list(adapter._stateless_other_actors)
+    adapter._update_and_tick(observation(ego, [named, unnamed]))
+    assert adapter._other_actors_by_key == {}
+    assert len(adapter._stateless_other_actors) == 2
+    assert all(actor.destroy_calls == 1 for actor in first_actors)
 
-    adapter._object_identity_mode = "provided"
-    adapter._destroy_other_actors()
-    adapter._update_and_tick([ego, item])
-    provided = adapter._other_actors_by_key[("id", "stable")]
-    adapter._update_and_tick([ego, item])
-    assert adapter._other_actors_by_key[("id", "stable")] is provided
-    with pytest.raises(InvalidAvRequest, match="requires one of"):
-        adapter._update_and_tick([ego, object_state(2)])
+
+def test_duplicate_tracking_ids_are_rejected():
+    adapter = configured_adapter()
+    agents = [
+        observed_agent(object_state(1), tracking_id=7),
+        observed_agent(object_state(2), tracking_id=7),
+    ]
+    with pytest.raises(InvalidAvRequest, match="duplicate"):
+        adapter._update_and_tick(observation(agents=agents))
+
+
+def test_agent_order_does_not_change_ego_pose():
+    adapter = configured_adapter()
+    agents = [
+        observed_agent(object_state(1), tracking_id=1),
+        observed_agent(object_state(2), tracking_id=2),
+    ]
+    ego = object_state(50)
+    adapter._update_and_tick(observation(ego, agents))
+    adapter._update_and_tick(observation(ego, reversed(agents)))
+    assert [transform.location.x for transform in adapter._vehicle.transforms] == [50.0, 50.0]
+
+
+def test_shape_center_and_actor_origin_offsets_are_composed():
+    adapter = configured_adapter()
+    shape = ShapeData(
+        type=ShapeType.BOUNDING_BOX,
+        dimensions=ShapeDimensionData(x=4.0, y=2.0, z=1.5),
+        center=ShapeCenterPoseData(x=2.0, y=1.0, z=0.5, yaw=math.pi / 2),
+        reference_point="rear_axle",
+    )
+    state = object_state(10, shape=shape)
+    agent = observed_agent(state, tracking_id=9)
+    adapter._update_and_tick(observation(agents=[agent]))
+    actor = adapter._other_actors_by_key[9]
+    actor.bounding_box.location.x = 0.5
+    adapter._update_and_tick(observation(agents=[agent]))
+    transform = actor.transforms[-1]
+    assert transform.location.x == pytest.approx(12.0)
+    assert transform.location.y == pytest.approx(0.5)
+    assert transform.location.z == pytest.approx(0.5)
+    assert transform.rotation.yaw == pytest.approx(90.0)
+
+
+def test_cleanup_clears_tracking_state():
+    adapter = configured_adapter()
+    adapter._update_and_tick(observation(agents=[observed_agent(object_state(1), tracking_id=4)]))
+    adapter._cleanup_wrapper_actors()
+    assert adapter._other_actors_by_key == {}
+    assert adapter._stateless_other_actors == []
+    assert adapter._using_tracking_ids is False
+
+
+def test_contract_timestamp_grid_and_normalized_snapshot():
+    adapter = configured_adapter()
+    snapshots = []
+    adapter._pcla = SimpleNamespace(
+        get_action=lambda snapshot=None: (
+            snapshots.append(snapshot) or SimpleNamespace(throttle=0.1, brake=0.0, steer=0.0)
+        )
+    )
+    adapter._data_provider = None
+
+    adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
+    next_ego = object_state(kinematic=kinematic(time_ns=50_000_000))
+    adapter.step(SimpleNamespace(observation=observation(next_ego), timestamp_ns=50_000_000))
+
+    assert snapshots[0].timestamp.elapsed_seconds == 0.0
+    assert snapshots[0].timestamp.delta_seconds == 0.0
+    assert snapshots[1].timestamp.elapsed_seconds == pytest.approx(0.05)
+    assert snapshots[1].timestamp.delta_seconds == pytest.approx(0.05)
+    with pytest.raises(InvalidAvRequest, match="must be 100000000"):
+        adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=50_000_000))
+
+
+def test_reset_pcla_game_time_clears_reused_world_clock():
+    adapter = configured_adapter()
+    game_time = SimpleNamespace(
+        _current_game_time=12.0,
+        _carla_time=100.0,
+        _last_frame=500,
+        _platform_timestamp=object(),
+        _init=True,
+    )
+    adapter._pcla_module = SimpleNamespace(GameTime=game_time)
+    adapter._reset_pcla_game_time()
+    assert (
+        game_time._current_game_time,
+        game_time._carla_time,
+        game_time._last_frame,
+        game_time._platform_timestamp,
+        game_time._init,
+    ) == (0.0, 0.0, 0, 0, False)
+
+
+def test_contract_rejects_nonfinite_unsupported_and_invalid_shape():
+    adapter = configured_adapter()
+    with pytest.raises(InvalidAvRequest, match="finite"):
+        adapter._prepare_observation(observation(object_state(kinematic=kinematic(x=math.nan))), 0)
+
+    invalid_dimensions = box_shape(dimensions=(0.0, 2.0, 1.5))
+    with pytest.raises(InvalidAvRequest, match="positive"):
+        adapter._prepare_observation(observation(object_state(shape=invalid_dimensions)), 0)
+
+    unsupported = ShapeData(
+        type=ShapeType.CYLINDER,
+        dimensions=ShapeDimensionData(x=1.0, y=1.0, z=2.0),
+    )
+    with pytest.raises(InvalidAvRequest, match="unsupported"):
+        adapter._prepare_observation(observation(object_state(shape=unsupported)), 0)
+
+
+def test_tracking_shape_cache_reuses_omission_and_rejects_mutation():
+    adapter = configured_adapter()
+    first_shape = box_shape()
+    first = observed_agent(object_state(1, shape=first_shape), tracking_id=8)
+    prepared = adapter._prepare_observation(observation(agents=[first]), 0)
+    assert prepared.agents[0].state.shape is first_shape
+
+    omitted = observed_agent(object_state(2), tracking_id=8)
+    prepared = adapter._prepare_observation(observation(agents=[omitted]), 0)
+    assert prepared.agents[0].state.shape is first_shape
+
+    changed = observed_agent(
+        object_state(2, shape=box_shape(dimensions=(5.0, 2.0, 1.5))), tracking_id=8
+    )
+    with pytest.raises(InvalidAvRequest, match="changed shape"):
+        adapter._prepare_observation(observation(agents=[changed]), 0)
+
+
+def test_ego_shape_cache_reuses_omission_and_rejects_reference_change():
+    adapter = configured_adapter()
+    initial_shape = box_shape()
+    adapter._prepare_observation(observation(object_state(shape=initial_shape)), 0)
+
+    prepared = adapter._prepare_observation(observation(), 0)
+    assert prepared.ego.shape is initial_shape
+
+    changed_reference = ShapeData(
+        type=initial_shape.type,
+        dimensions=initial_shape.dimensions,
+        center=initial_shape.center,
+        reference_point="different_origin",
+    )
+    with pytest.raises(InvalidAvRequest, match="ego changed shape"):
+        adapter._prepare_observation(observation(object_state(shape=changed_reference)), 0)
+
+
+def test_blueprint_matching_uses_nearest_dimensions_and_warns_once(caplog):
+    near = FakeBlueprint("vehicle.near", dimensions=(4.1, 2.0, 1.5))
+    far = FakeBlueprint("vehicle.far", dimensions=(8.0, 3.0, 3.0))
+    world = FakeWorld(FakeBlueprintLibrary(patterns={"vehicle.*": [far, near]}))
+    adapter = configured_adapter(world)
+    state = object_state(shape=box_shape(dimensions=(4.0, 2.0, 1.5)))
+
+    with caplog.at_level("WARNING", logger="pcla_wrapper.pcla_av"):
+        selected = adapter._pick_blueprint_for_state(state)
+        selected_again = adapter._pick_blueprint_for_state(state)
+
+    assert selected.id == "vehicle.near"
+    assert selected_again.id == "vehicle.near"
+    assert caplog.text.count("nearest CARLA geometry") == 1
+    assert all(not actor.is_alive for actor in world.actors)
+
+
+def test_relative_rotation_uses_full_handedness_basis_conversion():
+    adapter = configured_adapter()
+    adapter._coordinate_y_sign = -1.0
+    adapter._yaw_sign = -1.0
+    center = ShapeCenterPoseData(roll=0.2, pitch=0.1, yaw=0.3)
+    converted = adapter._relative_rotation_to_carla(center)
+    roll, pitch, yaw = adapter._matrix_to_rotation(converted)
+    assert roll == pytest.approx(math.degrees(-0.2))
+    assert pitch == pytest.approx(math.degrees(0.1))
+    assert yaw == pytest.approx(math.degrees(-0.3))
+
+
+def test_control_contract_enforces_ranges_brake_priority_and_sign():
+    adapter = configured_adapter()
+    adapter._steer_sign = -1.0
+    assert adapter._normalize_control(SimpleNamespace(throttle=0.8, brake=0.2, steer=0.4)) == {
+        "throttle": 0.0,
+        "brake": 0.2,
+        "steer": -0.4,
+    }
+    with pytest.raises(AvUnavailable, match="missing"):
+        adapter._normalize_control(SimpleNamespace(throttle=0.0, brake=0.0))
+    with pytest.raises(AvUnavailable, match="finite"):
+        adapter._normalize_control(SimpleNamespace(throttle=math.nan, brake=0.0, steer=0.0))
+    with pytest.raises(AvUnavailable, match="canonical range"):
+        adapter._normalize_control(SimpleNamespace(throttle=1.01, brake=0.0, steer=0.0))
+    with pytest.raises(AvUnavailable, match="canonical range"):
+        adapter._normalize_control(SimpleNamespace(throttle=0.0, brake=0.0, steer=-1.01))
 
 
 def test_spawn_overlap_retries_and_teleports_to_observation():
@@ -1093,7 +1341,7 @@ def test_spawn_overlap_retries_and_teleports_to_observation():
     transform = FakeTransform(FakeLocation(1, 2, 3), FakeRotation())
     result = adapter._spawn_actor_allowing_observation_overlap(blueprint, transform)
     assert result is actor
-    adapter._apply_kinematic(result, kinematic(x=1, y=2, z=3), kinematic=True)
+    adapter._apply_state(result, object_state(kinematic=kinematic(x=1, y=2, z=3)), kinematic=True)
     assert result.transforms[-1].location.z == 3.0
 
 
@@ -1113,7 +1361,7 @@ def test_step_ticks_once_before_provider_and_action_with_same_snapshot():
 
     adapter._data_provider = Provider
     adapter._pcla = Agent()
-    response = adapter.step(SimpleNamespace(observation=[object_state()], timestamp_ns=42))
+    response = adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
     assert isinstance(response, StepResponse)
     assert response.ctrl_cmd.mode == ControlMode.THROTTLE_STEER_BREAK
     assert adapter._world.tick_calls == 1
@@ -1121,9 +1369,13 @@ def test_step_ticks_once_before_provider_and_action_with_same_snapshot():
         "tick",
         "snapshot",
         "provider",
-        ("action", adapter._world.snapshot),
+        ("action", events[-1][1]),
     ]
-    assert adapter._last_timestamp_ns == 42
+    normalized_snapshot = events[-1][1]
+    assert normalized_snapshot.native_snapshot is adapter._world.snapshot
+    assert normalized_snapshot.timestamp.elapsed_seconds == 0.0
+    assert normalized_snapshot.timestamp.delta_seconds == 0.0
+    assert adapter._last_timestamp_ns == 0
 
 
 def test_action_and_cleanup_use_runtime_directory(tmp_path):
@@ -1161,7 +1413,7 @@ def test_none_action_and_pcla_exception_are_not_silent():
     adapter._data_provider = None
     adapter._pcla = SimpleNamespace(get_action=lambda snapshot=None: None)
     with pytest.raises(AvPreconditionFailed, match="no action"):
-        adapter.step(SimpleNamespace(observation=[object_state()], timestamp_ns=0))
+        adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
     assert adapter.should_quit().should_quit is True
 
     def fail(snapshot=None):
@@ -1169,7 +1421,7 @@ def test_none_action_and_pcla_exception_are_not_silent():
 
     adapter._pcla = SimpleNamespace(get_action=fail)
     with pytest.raises(AvUnavailable, match="model crashed"):
-        adapter.step(SimpleNamespace(observation=[object_state()], timestamp_ns=0))
+        adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
     assert "model crashed" in adapter.should_quit().msg
 
 
@@ -1179,7 +1431,7 @@ def test_none_action_can_use_timeout_policy():
     adapter._action_none_timeout = 0.001
     adapter._pcla = SimpleNamespace(get_action=lambda snapshot=None: None)
     with pytest.raises(AvTimeout, match="no action"):
-        adapter.step(SimpleNamespace(observation=[object_state()], timestamp_ns=0))
+        adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
 
 
 def test_reset_partial_failure_finalizes():
@@ -1193,7 +1445,7 @@ def test_reset_partial_failure_finalizes():
     request = SimpleNamespace(
         output_dir=Path("out"),
         scenario_pack=SimpleNamespace(map_name="Town"),
-        initial_observation=[object_state()],
+        initial_observation=observation(),
     )
     with pytest.raises(RuntimeError, match="broken"):
         adapter.reset(request)
