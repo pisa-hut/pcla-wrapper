@@ -79,9 +79,10 @@ RUN set -eux; \
             "/app/PCLA/pcla_agents/plant2/carla_garage/speed_limits/$(basename "${speed_limit}")"; \
     done; \
     for name in carl_pretrained plant2_pretrained plant_pretrained; do \
-        ln -s "/opt/pcla-pretrained/${name}" \
+        ln -s "/mnt/weights" \
             "/app/PCLA/pcla_agents/${name}"; \
-    done
+    done; \
+    python -c 'from pathlib import Path; p = Path("/app/PCLA/pcla_agents/plant/PlanT_agent.py"); s = p.read_text(); s = s.replace("Mount the official pcla_agents directory at /opt/" + "pcla-" + "pretrained:ro or set PCLA_PRETRAINED_ROOT.", "Mount the selected weight directory at /mnt/weights:ro."); p.write_text(s)'
 
 RUN test -f /app/PCLA/PCLA.py \
     && grep -q 'map_name == "OpenDriveMap"' \
@@ -91,11 +92,8 @@ RUN test -f /app/PCLA/PCLA.py \
     && chmod +x \
         /app/entrypoint.sh \
         /app/carla_server.sh \
-        /app/scripts/download_pcla_pretrained.sh \
-        /app/scripts/prepare_weight_profile.py \
         /app/scripts/smoke_common_agent.py \
         /app/scripts/validate_common_runtime.py \
-        /app/scripts/validate_pcla_pretrained.py \
     && PYTHONPATH=/app:/app/PCLA \
         /opt/pcla-venv/bin/python /app/scripts/validate_common_runtime.py
 
@@ -115,7 +113,7 @@ ENV CARLA_NULLRHI=1
 ENV CARLA_HOME=/mnt/output/.carla-home
 ENV HOME=/mnt/output/.carla-home
 ENV PCLA_IMAGE_PROFILE=common
-ENV PCLA_PRETRAINED_ROOT=/opt/pcla-pretrained
+ENV PCLA_PRETRAINED_ROOT=/mnt/weights
 ENV CUBLAS_WORKSPACE_CONFIG=:4096:8
 
 ENTRYPOINT ["/app/entrypoint.sh"]

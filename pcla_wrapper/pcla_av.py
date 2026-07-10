@@ -550,7 +550,7 @@ class PclaAV:
         self._pretrained_root = Path(
             os.environ.get(
                 "PCLA_PRETRAINED_ROOT",
-                self.config.get("pcla_pretrained_root", "/opt/pcla-pretrained"),
+                self.config.get("pcla_pretrained_root", "/mnt/weights"),
             )
         ).resolve()
         self._agent_name = str(

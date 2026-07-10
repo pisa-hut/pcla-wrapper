@@ -35,7 +35,7 @@ values, Init fails with `InvalidAvRequest`.
 | --- | --- | --- |
 | `pcla_agent` | `carl_plant_3` | Registry name `<family>_<variant>[_seed]`. |
 | `pcla_root` | Repository PCLA submodule | Directory containing `PCLA.py` and `agents.json`. |
-| `pcla_pretrained_root` | `/opt/pcla-pretrained` | Root containing validated PCLA weight profiles. |
+| `pcla_pretrained_root` | `/mnt/weights` | Selected PCLA weight directory mounted by the executor. |
 | `pcla_runtime_dir` | `<reset output>/pcla_runtime` | Writable working directory for upstream agent code. |
 | `route_xml_path` | `null` | Existing route XML, or generate one from scenario start/goal. |
 | `route_waypoint_distance` | `2.0` | Route planner sampling distance in meters. |

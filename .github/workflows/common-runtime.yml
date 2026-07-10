@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       weights_path:
-        description: Absolute path to the extracted PCLA pcla_agents directory
+        description: Absolute path to the selected PCLA weight directory
         required: true
-        default: /opt/pcla-pretrained
+        default: /opt/pisa/plant_pretrained
 
 jobs:
   common-runtime:
@@ -23,39 +23,13 @@ jobs:
       - name: Validate runtime and mounted weights
         run: |
           docker run --rm --gpus all \
-            -v "${{ inputs.weights_path }}:/opt/pcla-pretrained:ro" \
+            -v "${{ inputs.weights_path }}:/mnt/weights:ro" \
             pcla-wrapper:common-slim \
             /app/scripts/validate_common_runtime.py --check-weights
 
-      - name: Load priority agents
+      - name: Load default agent
         run: |
-          for agent in \
-            carl_plant_3 \
-            plant2_plant2_0 \
-            carl_carl_0 \
-            carl_roach_0
-          do
-            docker run --rm --gpus all \
-              -v "${{ inputs.weights_path }}:/opt/pcla-pretrained:ro" \
-              pcla-wrapper:common-slim \
-              /app/scripts/smoke_common_agent.py "${agent}"
-          done
-
-      - name: Stage common weights
-        run: |
-          rm -rf "${RUNNER_TEMP}/pcla-common-weights"
-          python3 scripts/prepare_weight_profile.py \
-            --profile common \
-            --source "${{ inputs.weights_path }}" \
-            --output "${RUNNER_TEMP}/pcla-common-weights"
-
-      - name: Build and validate bundled image
-        run: |
-          docker build \
-            -f docker/Dockerfile.bundled \
-            --build-arg BASE_IMAGE=pcla-wrapper:common-slim \
-            -t pcla-wrapper:common-bundled \
-            "${RUNNER_TEMP}/pcla-common-weights"
           docker run --rm --gpus all \
-            pcla-wrapper:common-bundled \
-            /app/scripts/validate_common_runtime.py --check-weights
+            -v "${{ inputs.weights_path }}:/mnt/weights:ro" \
+            pcla-wrapper:common-slim \
+            /app/scripts/smoke_common_agent.py carl_plant_3

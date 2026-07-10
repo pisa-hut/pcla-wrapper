@@ -6,11 +6,11 @@ export HOME="${CARLA_HOME}"
 export XDG_CACHE_HOME="${PCLA_XDG_CACHE_HOME:-${CARLA_HOME}/.cache}"
 mkdir -p "${HOME}/carlaCache" "${XDG_CACHE_HOME}"
 
-export PCLA_PRETRAINED_ROOT="${PCLA_PRETRAINED_ROOT:-/opt/pcla-pretrained}"
+export PCLA_PRETRAINED_ROOT="${PCLA_PRETRAINED_ROOT:-/mnt/weights}"
 export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
 
-if [[ "${PCLA_PRETRAINED_ROOT}" != "/opt/pcla-pretrained" ]]; then
-    echo "PCLA_PRETRAINED_ROOT must be /opt/pcla-pretrained; mount weights there." >&2
+if [[ "${PCLA_PRETRAINED_ROOT}" != "/mnt/weights" ]]; then
+    echo "PCLA_PRETRAINED_ROOT must be /mnt/weights; mount the selected weight directory there." >&2
     exit 1
 fi
 

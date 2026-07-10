@@ -24,30 +24,11 @@ runtime map caches, logs, and generated files.
 
 ## Slim And Bundled
 
-Use `common-slim` during development. Mount a common weight root read-only:
+Use `common-slim` during development. Mount the selected agent weight directory read-only:
 
 ```bash
--v /host/pcla-common-weights:/opt/pcla-pretrained:ro
+-v /host/plant_pretrained:/mnt/weights:ro
 ```
-
-For CI or a portable release, stage and bundle the selected profile:
-
-```bash
-python3 scripts/prepare_weight_profile.py \
-  --profile common \
-  --source /host/PCLA/pcla_agents \
-  --output /tmp/pcla-common-weights
-
-docker build \
-  -f docker/Dockerfile.bundled \
-  --build-arg BASE_IMAGE=pcla-wrapper:common-slim \
-  -t pcla-wrapper:common-bundled \
-  /tmp/pcla-common-weights
-```
-
-The bundled Dockerfile copies weights only after the runtime image is complete.
-Application/dependency rebuilds therefore remain independent of the large
-weight layer, and unchanged weights are reusable from Docker's cache.
 
 ## Internal CARLA
 
@@ -62,11 +43,9 @@ docker run --rm --gpus all --network host \
   -v "$HOME/.Xauthority":/home/carla/.Xauthority:ro \
   -v /host/maps:/mnt/map/xodr:ro \
   -v /host/output:/mnt/output \
-  -v /host/pcla-common-weights:/opt/pcla-pretrained:ro \
+  -v /host/plant_pretrained:/mnt/weights:ro \
   pcla-wrapper:common-slim
 ```
-
-Remove the weight mount when using `common-bundled`.
 
 The common images default to `CARLA_NULLRHI=1` because their supported agents
 do not use RGB camera input. Set `CARLA_NULLRHI=0` only when a rendered CARLA
@@ -102,5 +81,4 @@ The wrapper never terminates an external server.
 The standard workflow runs formatting and fake-based unit tests on GitHub-hosted
 runners. `.github/workflows/common-runtime.yml` is a manual workflow for a
 self-hosted runner labelled `gpu`. It builds `common-slim`, checks the mounted
-weights, loads one model from each priority family, builds `common-bundled`, and
-validates the bundled result.
+weights, and loads the default `carl_plant_3` model.

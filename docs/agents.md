@@ -22,35 +22,13 @@ because CARLA sensor and generated OpenDRIVE behavior is less reliable there.
 The slim image expects:
 
 ```text
-/opt/pcla-pretrained/
-├── plant_pretrained/
-├── plant2_pretrained/
-└── carl_pretrained/
+/mnt/weights/
+└── last-v3.ckpt   # with AV weight_path=weights/plant_pretrained
 ```
 
 The exact required checkpoint paths are versioned in
 `pcla_wrapper/agent_profiles.json`. Init validates the selected agent's files
 before importing its model and reports every missing path.
-
-The official archive can still be downloaded in full:
-
-```bash
-./scripts/download_pcla_pretrained.sh
-```
-
-For common images, do not put that full extraction into the Docker context.
-Create a minimal context instead:
-
-```bash
-python3 scripts/prepare_weight_profile.py \
-  --profile common \
-  --source PCLA/pcla_agents \
-  --output /tmp/pcla-common-weights
-```
-
-The staged directory contains only the three common weight directories and a
-`pcla-weight-profile.json` manifest. On the current archive this is roughly
-3 GiB rather than the full archive.
 
 ## Validation
 
@@ -58,7 +36,7 @@ Validate a slim image with mounted weights:
 
 ```bash
 docker run --rm --gpus all \
-  -v /path/to/common/weights:/opt/pcla-pretrained:ro \
+  -v /path/to/plant_pretrained:/mnt/weights:ro \
   pcla-wrapper:common-slim \
   /app/scripts/validate_common_runtime.py --check-weights
 ```
@@ -67,9 +45,9 @@ Load one model without starting CARLA:
 
 ```bash
 docker run --rm --gpus all \
-  -v /path/to/common/weights:/opt/pcla-pretrained:ro \
+  -v /path/to/plant_pretrained:/mnt/weights:ro \
   pcla-wrapper:common-slim \
-  /app/scripts/smoke_common_agent.py carl_roach_0
+  /app/scripts/smoke_common_agent.py carl_plant_3
 ```
 
 This checks dependency import, registry resolution, configuration, and

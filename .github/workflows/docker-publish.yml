@@ -5,12 +5,8 @@ name: Docker
 # separate terms of service, privacy policy, and support
 # documentation.
 #
-# PCLA ships its pretrained weights inside the image (the executor has no
-# per-AV weight mount), so this publishes the *common-bundled* image rather
-# than the slim base. The bundled build needs a separate staging context, so
-# it uses plain `docker build`/`docker push` instead of build-push-action.
-# Requires a self-hosted GPU runner that holds the full PCLA weights at
-# /opt/pcla-pretrained (same assumption as common-runtime.yml).
+# PCLA weights are mounted by the executor at /mnt/weights, so this publishes
+# the slim runtime image without downloading or bundling pretrained weights.
 
 on:
   push:
@@ -47,7 +43,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # The build needs PCLA/dist/carla-*.whl and PCLA/pcla_agents/**.
+          # The build needs PCLA/dist/carla-*.whl and source assets, but not
+          # pretrained weights.
           submodules: recursive
 
       # Install the cosign tool except on PR
@@ -80,36 +77,14 @@ jobs:
           echo "tag=${REF_TAG}" >> "$GITHUB_OUTPUT"
           echo "image=${IMG}" >> "$GITHUB_OUTPUT"
 
-      # Runtime base image (code + deps + CARLA, no weights).
-      - name: Build common-slim
-        run: docker build --target common-slim -t pcla-wrapper:common-slim .
-
-      # Fetch the official pretrained archive into the submodule's pcla_agents
-      # tree. .dockerignore keeps *_pretrained out of the slim context, so this
-      # only feeds the staging step below — not the slim build above.
-      - name: Download PCLA pretrained weights
-        run: bash scripts/download_pcla_pretrained.sh PCLA/pcla_agents
-
-      # Stage just the "common" profile weights (plant/plant2/carl) from the
-      # downloaded archive into an isolated build context.
-      - name: Stage common weights
-        run: |
-          set -euo pipefail
-          rm -rf "${RUNNER_TEMP}/pcla-common-weights"
-          python3 scripts/prepare_weight_profile.py \
-            --profile common \
-            --source PCLA/pcla_agents \
-            --output "${RUNNER_TEMP}/pcla-common-weights"
-
-      # Bake the staged weights onto common-slim → the deployment image.
-      - name: Build common-bundled
+      # Runtime image (code + deps + CARLA, no weights).
+      - name: Build image
         run: |
           set -euo pipefail
           docker build \
-            -f docker/Dockerfile.bundled \
-            --build-arg BASE_IMAGE=pcla-wrapper:common-slim \
+            --target common-slim \
             -t "${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.tag }}" \
-            "${RUNNER_TEMP}/pcla-common-weights"
+            .
 
       # Push and capture the pushed digest (don't push on PR).
       - name: Push image
