@@ -14,11 +14,10 @@ pcla_agent: carl_plant_3
 # Directory containing PCLA.py and agents.json.
 pcla_root: /app/PCLA
 
-# Root of the validated pretrained-weight profile. Both slim and bundled
-# Docker images use /opt/pcla-pretrained. Slim mounts weights there; bundled
-# copies them into the image. The Docker entrypoint rejects another path.
+# Root of the selected pretrained-weight directory. PISA mounts the AV
+# weight_path there. The Docker entrypoint rejects another path.
 # PCLA_PRETRAINED_ROOT overrides this value.
-pcla_pretrained_root: /opt/pcla-pretrained
+pcla_pretrained_root: /mnt/weights
 
 # Writable working directory used while constructing, running, and cleaning
 # upstream PCLA code. null resolves to <Reset output_dir>/pcla_runtime.

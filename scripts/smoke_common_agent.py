@@ -15,7 +15,7 @@ def main() -> int:
     args = parser.parse_args()
 
     os.environ.setdefault("PCLA_IMAGE_PROFILE", "common")
-    os.environ.setdefault("PCLA_PRETRAINED_ROOT", "/opt/pcla-pretrained")
+    os.environ.setdefault("PCLA_PRETRAINED_ROOT", "/mnt/weights")
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
     pcla_root = args.pcla_root.resolve()

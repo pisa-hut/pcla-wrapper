@@ -31,13 +31,22 @@ def validate_image_profile(agent_name: str, pretrained_root: Path) -> None:
             f"{profile_name!r}. Supported agents: {supported}"
         )
 
-    missing = [
-        pretrained_root / path for path in required_paths if not (pretrained_root / path).is_file()
-    ]
+    missing = []
+    for path in required_paths:
+        relative_path = Path(path)
+        expected_path = pretrained_root / relative_path
+        direct_relative_path = (
+            Path(*relative_path.parts[1:])
+            if relative_path.parts and relative_path.parts[0].endswith("_pretrained")
+            else relative_path
+        )
+        direct_path = pretrained_root / direct_relative_path
+        if not expected_path.is_file() and not direct_path.is_file():
+            missing.append(expected_path)
     if missing:
         formatted = ", ".join(str(path) for path in missing)
         raise InvalidAvRequest(
             f"PCLA agent {agent_name!r} weights are unavailable for image profile "
-            f"{profile_name!r}: {formatted}. Mount the common weights at "
-            f"{pretrained_root} or use the common-bundled image."
+            f"{profile_name!r}: {formatted}. Mount the selected weight directory at "
+            f"{pretrained_root}."
         )

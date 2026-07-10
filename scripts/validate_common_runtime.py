@@ -44,15 +44,21 @@ def main() -> int:
     assert not Path("/usr/local/cuda-11.8").exists()
 
     if args.check_weights:
-        manifest_path = Path("/opt/pcla-pretrained/pcla-weight-profile.json")
+        pretrained_root = Path(os.environ.get("PCLA_PRETRAINED_ROOT", "/mnt/weights"))
+        manifest_path = pretrained_root / "pcla-weight-profile.json"
         if manifest_path.is_file():
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             assert manifest["profile"] == "common"
         os.environ["PCLA_IMAGE_PROFILE"] = "common"
         from pcla_wrapper.profiles import load_agent_profiles, validate_image_profile
 
-        for agent_name in load_agent_profiles()["common"]["agents"]:
-            validate_image_profile(agent_name, Path("/opt/pcla-pretrained"))
+        agent_names = (
+            load_agent_profiles()["common"]["agents"]
+            if manifest_path.is_file()
+            else [os.environ.get("PCLA_AGENT", "carl_plant_3")]
+        )
+        for agent_name in agent_names:
+            validate_image_profile(agent_name, pretrained_root)
 
     print(
         json.dumps(

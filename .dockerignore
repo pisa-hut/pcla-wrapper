@@ -10,7 +10,7 @@ output/
 
 # PCLA's official archive expands to more than 40 GiB. Keep weights out of the
 # slim context. Dockerfile links only the common *_pretrained directories to
-# the fixed /opt/pcla-pretrained runtime path.
+# the fixed /mnt/weights runtime path.
 PCLA/pcla_agents/*_pretrained/
 PCLA/pcla_agents/plant*/carla_garage/speed_limits/OpenDriveMap_speed_limits.npy
 

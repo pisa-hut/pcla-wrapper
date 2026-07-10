@@ -404,14 +404,15 @@ def test_pretrained_weights_are_external_and_reproducible():
     dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
     entrypoint = Path("entrypoint.sh").read_text(encoding="utf-8")
     gitmodules = Path(".gitmodules").read_text(encoding="utf-8")
-    downloader = Path("scripts/download_pcla_pretrained.sh").read_text(encoding="utf-8")
 
     assert "PCLA/pcla_agents/*_pretrained/" in dockerignore
     assert (
         "PCLA/pcla_agents/plant*/carla_garage/speed_limits/OpenDriveMap_speed_limits.npy"
     ) in dockerignore
-    assert 'ln -s "/opt/pcla-pretrained/${name}"' in dockerfile
-    assert "ENV PCLA_PRETRAINED_ROOT=/opt/pcla-pretrained" in dockerfile
+    assert 'ln -s "/mnt/weights"' in dockerfile
+    assert "Mount the selected weight directory at /mnt/weights:ro." in dockerfile
+    assert "pcla-" + "pretrained" not in dockerfile
+    assert "ENV PCLA_PRETRAINED_ROOT=/mnt/weights" in dockerfile
     assert "ENV CUBLAS_WORKSPACE_CONFIG=:4096:8" in dockerfile
     assert 'map_name == "OpenDriveMap"' in dockerfile
     assert "MapImage.draw_map_image" in dockerfile
@@ -419,9 +420,8 @@ def test_pretrained_weights_are_external_and_reproducible():
     assert 'export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"' in entrypoint
     assert "https://github.com/sysnycu/PCLA.git" in gitmodules
     assert "branch = pisa-integration" in gitmodules
-    assert "curl -fL --retry 5" in downloader
-    assert "sha256sum --check -" in downloader
-    assert "scripts/validate_pcla_pretrained.py" in downloader
+    assert "/app/scripts/smoke_common_agent.py" in dockerfile
+    assert "/app/scripts/validate_common_runtime.py" in dockerfile
     assert "/opt/conda" not in dockerfile
     assert "/usr/local/cuda-11.8" not in dockerfile
     assert "FROM common-runtime AS common-slim" in dockerfile
@@ -429,13 +429,10 @@ def test_pretrained_weights_are_external_and_reproducible():
     assert "ENV CARLA_NULLRHI=1" in dockerfile
 
 
-def test_common_bundled_image_validates_staged_weights():
-    dockerfile = Path("docker/Dockerfile.bundled").read_text(encoding="utf-8")
+def test_no_weight_bundling_image_build_path():
     profiles = json.loads(Path("pcla_wrapper/agent_profiles.json").read_text(encoding="utf-8"))
 
-    assert "ARG BASE_IMAGE=pcla-wrapper:common-slim" in dockerfile
-    assert "COPY . /opt/pcla-pretrained" in dockerfile
-    assert "--check-weights" in dockerfile
+    assert not any(Path("docker").glob("*bundled*"))
     assert profiles["common"]["weight_directories"] == [
         "plant_pretrained",
         "plant2_pretrained",
@@ -506,6 +503,14 @@ def test_common_profile_accepts_supported_agent_and_rejects_other_profiles(monke
 
     with pytest.raises(InvalidAvRequest, match="not supported by image profile"):
         validate_image_profile("simlingo_simlingo", pretrained_root)
+
+
+def test_common_profile_accepts_direct_selected_weight_dir(monkeypatch, tmp_path):
+    checkpoint = tmp_path / "last-v3.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    monkeypatch.setenv("PCLA_IMAGE_PROFILE", "common")
+
+    validate_image_profile("carl_plant_3", tmp_path)
 
 
 def test_common_profile_reports_missing_selected_agent_weights(monkeypatch, tmp_path):

@@ -45,33 +45,24 @@ git submodule update --init --recursive
 docker build --target common-slim -t pcla-wrapper:common-slim .
 ```
 
-`common-slim` excludes weights. Mount the three common pretrained directories
-at runtime:
+`common-slim` excludes weights. Mount the selected pretrained directory at
+runtime:
 
 ```text
-/opt/pcla-pretrained/plant_pretrained
-/opt/pcla-pretrained/plant2_pretrained
-/opt/pcla-pretrained/carl_pretrained
+/mnt/weights/last-v3.ckpt
 ```
 
-To make a self-contained image, stage only those directories and build the
-bundled variant:
+To download the upstream PCLA weight archive for a local PISA host, run:
 
 ```bash
-python3 scripts/prepare_weight_profile.py \
-  --profile common \
-  --source /path/to/PCLA/pcla_agents \
-  --output /tmp/pcla-common-weights
-
-docker build \
-  -f docker/Dockerfile.bundled \
-  --build-arg BASE_IMAGE=pcla-wrapper:common-slim \
-  -t pcla-wrapper:common-bundled \
-  /tmp/pcla-common-weights
+scripts/download_pcla_weights.sh /opt/pisa/weights
 ```
 
-The staging command validates every common checkpoint and writes a manifest.
-The bundled build fails if any required file is absent.
+For the default `pcla` AV, set `weight_path` to
+`weights/plant_pretrained`. The executor resolves that under `PISA_DATA_DIR`
+and mounts `/opt/pisa/weights/plant_pretrained` into the AV container as
+`/mnt/weights`. CI and image builds do not run this download script; they build
+the runtime image without model weights.
 
 ## Run
 
@@ -84,16 +75,15 @@ docker run --rm --gpus all --network host \
   -v "$HOME/.Xauthority":/home/carla/.Xauthority:ro \
   -v /path/to/xodr:/mnt/map/xodr:ro \
   -v /path/to/output:/mnt/output \
-  -v /path/to/common/weights:/opt/pcla-pretrained:ro \
+  -v /path/to/plant_pretrained:/mnt/weights:ro \
   pcla-wrapper:common-slim
 ```
 
-Use `pcla-wrapper:common-bundled` without the weight volume for the bundled
-variant. The common images default to `CARLA_NULLRHI=1` because PlanT 1.0,
-PlanT 2.0, CaRL, and Roach do not use RGB camera input. This avoids requiring
-X11 for the internal CARLA server. Set `CARLA_NULLRHI=0` only for a rendered
-configuration; that mode may require `DISPLAY`, X11 authorization, and the
-NVIDIA Vulkan runtime.
+The common images default to `CARLA_NULLRHI=1` because PlanT 1.0, PlanT 2.0,
+CaRL, and Roach do not use RGB camera input. This avoids requiring X11 for the
+internal CARLA server. Set `CARLA_NULLRHI=0` only for a rendered configuration;
+that mode may require `DISPLAY`, X11 authorization, and the NVIDIA Vulkan
+runtime.
 
 For an external CARLA server, set `launch_carla_server: false` in the request
 configuration and provide `CARLA_HOST` and `CARLA_PORT`.
@@ -127,5 +117,5 @@ uv run pytest
 ```
 
 The regular CI uses fakes and does not require weights or a GPU. The manually
-triggered `Common Runtime` workflow runs on a self-hosted GPU runner, validates
-the four priority agent families, and builds both image variants.
+triggered `Common Runtime` workflow expects weights to already exist on the
+runner and mounts the selected directory into `/mnt/weights`.
