@@ -6,7 +6,7 @@ on:
       weights_path:
         description: Absolute path to the selected PCLA weight directory
         required: true
-        default: /opt/pisa/plant_pretrained
+        default: /opt/pisa/weights/plant_pretrained
 
 jobs:
   common-runtime:

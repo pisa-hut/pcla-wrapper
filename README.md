@@ -52,6 +52,18 @@ runtime:
 /mnt/weights/last-v3.ckpt
 ```
 
+To download the upstream PCLA weight archive for a local PISA host, run:
+
+```bash
+scripts/download_pcla_weights.sh /opt/pisa/weights
+```
+
+For the default `pcla` AV, set `weight_path` to
+`weights/plant_pretrained`. The executor resolves that under `PISA_DATA_DIR`
+and mounts `/opt/pisa/weights/plant_pretrained` into the AV container as
+`/mnt/weights`. CI and image builds do not run this download script; they build
+the runtime image without model weights.
+
 ## Run
 
 The default mode launches CARLA inside the same container:
@@ -105,5 +117,5 @@ uv run pytest
 ```
 
 The regular CI uses fakes and does not require weights or a GPU. The manually
-triggered `Common Runtime` workflow runs on a self-hosted GPU runner, validates
-the four priority agent families, and builds both image variants.
+triggered `Common Runtime` workflow expects weights to already exist on the
+runner and mounts the selected directory into `/mnt/weights`.
