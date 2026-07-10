@@ -82,7 +82,7 @@ RUN set -eux; \
         ln -s "/mnt/weights" \
             "/app/PCLA/pcla_agents/${name}"; \
     done; \
-    python -c 'from pathlib import Path; p = Path("/app/PCLA/pcla_agents/plant/PlanT_agent.py"); s = p.read_text(); s = s.replace("Mount the official pcla_agents directory at /opt/" + "pcla-" + "pretrained:ro or set PCLA_PRETRAINED_ROOT.", "Mount the selected weight directory at /mnt/weights:ro."); p.write_text(s)'
+    /opt/pcla-venv/bin/python -c 'from pathlib import Path; p = Path("/app/PCLA/pcla_agents/plant/PlanT_agent.py"); s = p.read_text(); s = s.replace("Mount the official pcla_agents directory at /opt/" + "pcla-" + "pretrained:ro or set PCLA_PRETRAINED_ROOT.", "Mount the selected weight directory at /mnt/weights:ro."); p.write_text(s)'
 
 RUN test -f /app/PCLA/PCLA.py \
     && grep -q 'map_name == "OpenDriveMap"' \
