@@ -128,12 +128,14 @@ class PclaAV:
             )
             if self._launch_carla_server and self._server_process is None:
                 self._launch_server()
-            if not self._ensure_connected():
+            try:
+                connected = self._ensure_connected()
+            except (AvTimeout, AvUnavailable):
                 self._terminate_server_process()
-                raise AvTimeout(
-                    f"Timed out connecting to CARLA at {self._host}:{self._port} "
-                    f"after {self._connect_timeout:.1f}s"
-                )
+                raise
+            if not connected:
+                self._terminate_server_process()
+                raise AvTimeout(self._connect_timeout_message(None))
             self._prepare_reused_server_state()
             self._quit_flag = False
             self._quit_msg = ""
@@ -799,18 +801,66 @@ class PclaAV:
     def _ensure_connected(self) -> bool:
         if self._server_version is not None and self._client is not None:
             return True
-        deadline = time.monotonic() + self._connect_timeout
+        self._raise_if_owned_server_exited(cause=None)
+        deadline = time.monotonic() + getattr(self, "_connect_timeout", 30.0)
+        last_error: Exception | None = None
         while True:
+            self._raise_if_owned_server_exited(cause=last_error)
             try:
                 self._connect_once()
                 return True
-            except Exception:
+            except (AvTimeout, AvUnavailable):
+                raise
+            except Exception as exc:
+                last_error = exc
+                self._raise_if_owned_server_exited(cause=exc)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    logger.exception("Timed out connecting to CARLA")
-                    return False
+                    message = self._connect_timeout_message(exc)
+                    logger.exception(message)
+                    raise AvTimeout(message) from exc
                 logger.warning("CARLA connection failed; retrying", exc_info=True)
                 time.sleep(min(self._retry_interval, remaining))
+
+    def _carla_endpoint(self) -> str:
+        return f"{getattr(self, '_host', 'localhost')}:{getattr(self, '_port', 2000)}"
+
+    def _connection_error_details(self, exc: Exception | None) -> str:
+        if exc is None:
+            return "none"
+        return f"{type(exc).__name__}: {exc}"
+
+    def _server_log_hint(self) -> str:
+        log_dir = getattr(self, "_output_base", Path("/mnt/output")) / "carla_server"
+        return f"inspect {log_dir / 'stderr.log'} and {log_dir / 'stdout.log'}"
+
+    def _connect_timeout_message(self, last_error: Exception | None) -> str:
+        process = self._server_process
+        connect_timeout = getattr(self, "_connect_timeout", 30.0)
+        if self._server_owned and process is not None:
+            return_code = process.poll()
+            if return_code is not None:
+                return (
+                    f"Timed out after {connect_timeout:g}s connecting to CARLA at "
+                    f"{self._carla_endpoint()}; owned CARLA server exited with return code "
+                    f"{return_code}. Last connection error: "
+                    f"{self._connection_error_details(last_error)}. {self._server_log_hint()}"
+                )
+            pid = getattr(process, "pid", None)
+            process_status = (
+                f"owned CARLA server process is still running with pid {pid}"
+                if pid is not None
+                else "owned CARLA server process is still running"
+            )
+        elif getattr(self, "_launch_carla_server", False):
+            process_status = "owned CARLA server process status is unavailable"
+        else:
+            process_status = "external CARLA server health cannot be inferred"
+        return (
+            f"Timed out after {connect_timeout:g}s connecting to CARLA at "
+            f"{self._carla_endpoint()}; {process_status} but RPC did not respond. "
+            f"Last connection error: {self._connection_error_details(last_error)}"
+        )
 
     def _prepare_reused_server_state(self) -> None:
         if self._client is None:
@@ -1612,7 +1662,7 @@ class PclaAV:
             else:
                 process.kill()
 
-    def _raise_if_owned_server_exited(self) -> None:
+    def _raise_if_owned_server_exited(self, *, cause: Exception | None = None) -> None:
         process = self._server_process
         if not self._server_owned or process is None:
             return
@@ -1620,14 +1670,17 @@ class PclaAV:
         if return_code is None:
             return
         message = self._owned_server_exit_message(return_code)
+        if cause is not None:
+            message = f"{message}; last connection error: {self._connection_error_details(cause)}"
         self._set_fatal_error(message)
-        raise AvUnavailable(message)
+        if cause is None:
+            raise AvUnavailable(message)
+        raise AvUnavailable(message) from cause
 
     def _owned_server_exit_message(self, return_code: int) -> str:
-        log_dir = self._output_base / "carla_server"
         return (
-            f"Owned CARLA server exited with return code {return_code}; inspect "
-            f"{log_dir / 'stderr.log'} and {log_dir / 'stdout.log'}"
+            f"Owned CARLA server exited with return code {return_code} before responding at "
+            f"{self._carla_endpoint()}; {self._server_log_hint()}"
         )
 
     def _set_fatal_error(self, message: str) -> None:

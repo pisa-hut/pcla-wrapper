@@ -1,6 +1,6 @@
 [project]
 name = "pcla-wrapper"
-version = "0.3.0"
+version = "0.3.1"
 description = "PISA AV service wrapper for PCLA agents"
 readme = "README.md"
 requires-python = ">=3.8,<3.11"

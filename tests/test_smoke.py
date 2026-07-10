@@ -861,8 +861,79 @@ def test_connection_retry_uses_total_timeout(monkeypatch):
         raise RuntimeError("offline")
 
     monkeypatch.setattr(adapter, "_connect_once", fail)
-    assert adapter._ensure_connected() is False
+    with pytest.raises(AvTimeout, match="Last connection error: RuntimeError: offline"):
+        adapter._ensure_connected()
     assert len(attempts) > 1
+
+
+def test_connection_reports_owned_server_exit_during_retry(monkeypatch):
+    adapter = PclaAV()
+    adapter._server_version = None
+    adapter._client = None
+    adapter._server_owned = True
+    adapter._server_process = FakeProcess(return_code=17)
+    adapter._host = "127.0.0.1"
+    adapter._port = 2000
+    adapter._output_base = Path("/mnt/output")
+
+    with pytest.raises(AvUnavailable) as exc_info:
+        adapter._ensure_connected()
+
+    message = str(exc_info.value)
+    assert "return code 17" in message
+    assert "127.0.0.1:2000" in message
+    assert "stderr.log" in message
+    assert "stdout.log" in message
+
+
+def test_connection_timeout_reports_owned_server_still_running(monkeypatch):
+    adapter = PclaAV()
+    adapter._server_version = None
+    adapter._client = None
+    adapter._server_owned = True
+    adapter._server_process = FakeProcess(return_code=None)
+    adapter._host = "127.0.0.1"
+    adapter._port = 2000
+    adapter._connect_timeout = 0.001
+    adapter._retry_interval = 0.001
+
+    def fail():
+        raise RuntimeError("rpc silent")
+
+    monkeypatch.setattr(adapter, "_connect_once", fail)
+    with pytest.raises(AvTimeout) as exc_info:
+        adapter._ensure_connected()
+
+    message = str(exc_info.value)
+    assert "owned CARLA server process is still running" in message
+    assert "127.0.0.1:2000" in message
+    assert "RuntimeError: rpc silent" in message
+
+
+def test_connection_timeout_reports_external_server_health_unavailable(monkeypatch):
+    adapter = PclaAV()
+    adapter._server_version = None
+    adapter._client = None
+    adapter._launch_carla_server = False
+    adapter._server_owned = False
+    adapter._server_process = None
+    adapter._host = "carla.example"
+    adapter._port = 2000
+    adapter._connect_timeout = 0.001
+    adapter._retry_interval = 0.001
+
+    def fail():
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(adapter, "_connect_once", fail)
+    with pytest.raises(AvTimeout) as exc_info:
+        adapter._ensure_connected()
+
+    message = str(exc_info.value)
+    assert "external CARLA server health cannot be inferred" in message
+    assert "carla.example:2000" in message
+    assert "RuntimeError: connection refused" in message
+    assert "stderr.log" not in message
 
 
 @pytest.mark.parametrize(
