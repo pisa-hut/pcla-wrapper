@@ -22,10 +22,9 @@ env:
 
 jobs:
   build:
-    # No GPU needed: this job only builds + pushes images. The container is
-    # never run here (that's common-runtime.yml's job), and `docker build`
-    # RUN steps don't get GPU access anyway. Self-hosted is still required
-    # for apptainer (SIF) and the disk/network for the multi-GB build.
+    # No GPU needed: this job only builds + pushes the Docker runtime image.
+    # The container is never run here (that's common-runtime.yml's job), and
+    # `docker build` RUN steps don't get GPU access anyway.
     runs-on: self-hosted
 
     env:
@@ -106,48 +105,3 @@ jobs:
           IMG: ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.tag }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes "${IMG}@${DIGEST}"
-
-      # ─── Apptainer SIF build + push (oras://docker.io/<ns>/<repo>-sif) ─
-      # Builds the SIF from the image we just pushed (pinned by digest so we
-      # ship the exact bits), then pushes to a SIF-specific Docker Hub repo.
-      # Self-hosted runner is assumed to have apptainer pre-installed.
-      - name: Build and push Apptainer SIF
-        if: github.event_name != 'pull_request'
-        env:
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          set -euo pipefail
-          SIF_REPO="$(echo '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-sif' | tr '[:upper:]' '[:lower:]')"
-          DOCKER_PINNED="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
-
-          cat > apptainer.def <<EOD
-          Bootstrap: docker
-          From: ${DOCKER_PINNED}
-
-          %startscript
-          #!/bin/bash
-          bash /app/entrypoint.sh
-          EOD
-
-          # Reuse the docker config that docker/login-action populated for the
-          # image push — apptainer's own `registry login` / `remote login` don't
-          # propagate creds to the OCI push code path on Docker Hub. Setting
-          # REGISTRY_AUTH_FILE makes the containers/image library that apptainer
-          # delegates to look at the same file the docker push used.
-          export REGISTRY_AUTH_FILE="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
-
-          # 3 retries: the OCI layer fetch can hit transient
-          # `connection reset by peer` on the multi-GB layers.
-          # Apptainer's OCI cache keeps already-fetched layers
-          # across attempts, so retries are cheap.
-          for attempt in 1 2 3; do
-            if apptainer build wrapper.sif apptainer.def; then
-              break
-            fi
-            echo "apptainer build attempt $attempt failed; retrying"
-            sleep 5
-            [ "$attempt" = "3" ] && exit 1
-          done
-
-          apptainer push wrapper.sif "oras://${SIF_REPO}:${{ steps.ref.outputs.tag }}"
-          echo "SIF pushed: oras://${SIF_REPO}:${{ steps.ref.outputs.tag }}"
