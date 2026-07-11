@@ -24,6 +24,7 @@ from pisa_api.av import (
     ControlCommand,
     ControlMode,
     InitRequest,
+    InitResponse,
     InvalidAvRequest,
     ObjectStateData,
     ObservationData,
@@ -106,7 +107,7 @@ class PclaAV:
         self._output_dir = Path()
         self._pcla_runtime_dir = None
 
-    def init(self, request: InitRequest) -> None:
+    def init(self, request: InitRequest) -> InitResponse:
         with self._lock:
             if not self._finalized:
                 self._finalize()
@@ -141,6 +142,10 @@ class PclaAV:
             self._quit_msg = ""
             self._last_error = ""
             self._initialized = True
+            return InitResponse(
+                name=self._agent_name,
+                metadata={"effective_config": self._effective_config()},
+            )
 
     def reset(self, request: ResetRequest) -> ResetResponse:
         with self._lock:
@@ -610,6 +615,26 @@ class PclaAV:
         self._debug_log_interval_steps = self._config_int("debug_log_interval_steps", 20)
         if self._debug_log_interval_steps < 0:
             raise InvalidAvRequest("debug_log_interval_steps must be non-negative")
+
+    def _effective_config(self) -> dict[str, Any]:
+        return {
+            "pcla_agent": self._agent_name,
+            "route_waypoint_distance": self._route_wp_distance,
+            "route_draw": self._route_draw,
+            "launch_carla_server": self._launch_carla_server,
+            "reuse_generated_world": self._reuse_generated_world,
+            "manage_traffic_manager_sync": self._manage_traffic_manager_sync,
+            "ego_role_name": self._ego_role_name,
+            "ego_bp_id": self._ego_bp_id,
+            "spawn_z_offset": self._spawn_z_offset,
+            "coordinate_y_sign": self._coordinate_y_sign,
+            "yaw_sign": self._yaw_sign,
+            "steer_sign": self._steer_sign,
+            "yaw_offset_deg": self._yaw_offset_deg,
+            "action_none_timeout_seconds": self._action_none_timeout,
+            "sensor_warmup_ticks": self._sensor_warmup_ticks,
+            "debug_log_interval_steps": self._debug_log_interval_steps,
+        }
 
     @staticmethod
     def _resolve_pcla_root(
