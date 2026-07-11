@@ -1,6 +1,6 @@
 # Default host directory for the selected PCLA agent weights. Override it on
 # recipes that accept a weights parameter.
-selected_weights := "/opt/pisa/weights/plant_pretrained"
+selected_weights := env_var_or_default("PISA_DATA_DIR", "/PISA_DATA_DIR") + "/weights/plant_pretrained"
 
 # Build the common runtime without model weights.
 build-common-slim:
