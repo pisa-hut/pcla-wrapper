@@ -99,6 +99,44 @@ configuration and provide `CARLA_HOST` and `CARLA_PORT`.
 The Python package is `pcla_wrapper`. The upstream fork is the top-level
 `PCLA/` submodule.
 
+## Service identity and initialization metadata
+
+This service uses `pcla-wrapper` as its stable wrapper artifact identity.
+`Ping` therefore returns `Pong.name = "pcla-wrapper"`, while `Pong.version`
+is the installed `pcla-wrapper` package/build version (with the repository's
+`pyproject.toml` version used when running an uninstalled source checkout).
+
+After successful Init, `InitResponse.name` identifies the actual validated PCLA
+component selected from `PCLA/agents.json`, for example `carl_plant_3` or
+`plant2_plant2_0`; it is intentionally different from the wrapper artifact
+name. `InitResponse.metadata.effective_config` records only normalized,
+validated wrapper-specific values that are actually in effect. For example:
+
+```yaml
+name: carl_plant_3
+metadata:
+  effective_config:
+    pcla_agent: carl_plant_3
+    route_waypoint_distance: 2.0
+    route_draw: false
+    launch_carla_server: true
+    coordinate_y_sign: -1.0
+    yaw_sign: -1.0
+    steer_sign: -1.0
+    sensor_warmup_ticks: 1
+```
+
+The complete effective config also reports world-reuse/Traffic Manager flags,
+ego blueprint settings, spawn and yaw offsets, the no-action timeout, and the
+debug-log interval. It does not copy raw config, paths, environment variables,
+credentials, `dt`, map/scenario identity, or output directories. This metadata
+is written into the execution manifest, so new fields must never contain
+secrets. Shared execution data such as `dt` and map must remain in its canonical
+runner-owned manifest fields rather than being duplicated here.
+
+The wrapper and runner must both use a compatible pisa-api with the Ping/Init
+identity contract (`pisa-api>=0.4.1` for this package).
+
 ## Documentation
 
 - [Configuration](docs/configuration.md)

@@ -1,4 +1,5 @@
 import ast
+import importlib.metadata
 import importlib.util
 import inspect
 import json
@@ -8,11 +9,16 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from google.protobuf.json_format import MessageToDict
+from google.protobuf.struct_pb2 import Struct
 from pisa_api.av import (
     AvPreconditionFailed,
     AvTimeout,
     AvUnavailable,
     ControlMode,
+    GenericAvService,
+    InitRequest,
+    InitResponse,
     InvalidAvRequest,
     ObservationData,
     ObservedAgentData,
@@ -23,11 +29,15 @@ from pisa_api.av import (
     ShapeType,
     ShouldQuitResponse,
     StepResponse,
+    init_request_to_proto,
 )
+from pisa_api.empty_pb2 import Empty
 
+from pcla_wrapper import version as version_module
 from pcla_wrapper.lifecycle import clear_dynamic_actors
 from pcla_wrapper.pcla_av import PclaAV
 from pcla_wrapper.profiles import validate_image_profile
+from pcla_wrapper.version import wrapper_version
 
 
 class FakeLocation:
@@ -335,9 +345,42 @@ def write_agents(root):
 
 def test_server_uses_generic_pisa_service():
     source = Path("pcla_wrapper/server.py").read_text(encoding="utf-8")
-    assert 'serve_av_system(PclaAV(), name="PCLA")' in source
+    assert "serve_av_system(PclaAV(), name=WRAPPER_NAME, version=wrapper_version())" in source
     assert "grpc.server" not in source
     assert "sbsvf_api" not in source
+
+
+def test_wrapper_version_uses_distribution_metadata(monkeypatch):
+    monkeypatch.setattr(version_module.metadata, "version", lambda name: "9.8.7")
+
+    assert wrapper_version() == "9.8.7"
+
+
+def test_wrapper_version_falls_back_to_checkout_pyproject(monkeypatch, tmp_path):
+    package_dir = tmp_path / "pcla_wrapper"
+    package_dir.mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "pcla-wrapper"\nversion = "4.5.6"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(version_module, "__file__", str(package_dir / "version.py"))
+
+    def missing(_name):
+        raise importlib.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(version_module.metadata, "version", missing)
+
+    assert wrapper_version() == "4.5.6"
+
+
+def test_generated_service_ping_reports_wrapper_identity():
+    service = GenericAvService(PclaAV(), name="pcla-wrapper", version="0.3.2")
+    context = SimpleNamespace(peer=lambda: "test")
+
+    response = service.Ping(Empty(), context)
+
+    assert response.msg == "pcla-wrapper alive"
+    assert response.name == "pcla-wrapper"
+    assert response.version == "0.3.2"
 
 
 def test_canonical_config_example_contains_current_keys_only():
@@ -688,11 +731,118 @@ def test_init_parses_request_without_loading_models(tmp_path):
             "launch_carla_server": False,
         },
     )
-    adapter.init(request)
+    response = adapter.init(request)
+    assert isinstance(response, InitResponse)
+    assert response.name == "carl_plant_3"
+    assert response.metadata == {
+        "effective_config": {
+            "pcla_agent": "carl_plant_3",
+            "route_waypoint_distance": 2.0,
+            "route_draw": False,
+            "launch_carla_server": False,
+            "reuse_generated_world": True,
+            "manage_traffic_manager_sync": False,
+            "ego_role_name": "hero",
+            "ego_bp_id": "vehicle.tesla.model3",
+            "spawn_z_offset": 3.0,
+            "coordinate_y_sign": -1.0,
+            "yaw_sign": -1.0,
+            "steer_sign": -1.0,
+            "yaw_offset_deg": 0.0,
+            "action_none_timeout_seconds": 0.0,
+            "sensor_warmup_ticks": 1,
+            "debug_log_interval_steps": 20,
+        }
+    }
+    struct = Struct()
+    struct.update(response.metadata)
+    assert MessageToDict(struct) == response.metadata
     assert adapter._initialized is True
     assert adapter._fixed_delta_seconds == pytest.approx(0.05)
     assert adapter._pcla is None
     assert adapter._pcla_module is None
+
+
+def test_init_returns_canonical_selected_component_and_normalized_config(tmp_path):
+    root = tmp_path / "PCLA"
+    write_agents(root)
+    adapter = PclaAV()
+    adapter._ensure_connected = lambda: True
+    adapter._prepare_reused_server_state = lambda: None
+
+    response = adapter.init(
+        SimpleNamespace(
+            output_dir=tmp_path / "output",
+            dt=0.05,
+            config={
+                "pcla_root": str(root),
+                "pcla_agent": "carl_plant_9",
+                "launch_carla_server": "false",
+                "route_draw": "true",
+                "coordinate_y_sign": -7,
+                "yaw_sign": -2,
+                "steer_sign": 3,
+            },
+        )
+    )
+
+    assert response.name == "carl_plant_9"
+    effective = response.metadata["effective_config"]
+    assert effective["launch_carla_server"] is False
+    assert effective["route_draw"] is True
+    assert effective["coordinate_y_sign"] == -1.0
+    assert effective["yaw_sign"] == -1.0
+    assert effective["steer_sign"] == 1.0
+
+
+def test_generated_service_init_serializes_component_and_metadata(tmp_path):
+    root = tmp_path / "PCLA"
+    write_agents(root)
+    adapter = PclaAV()
+    adapter._ensure_connected = lambda: True
+    adapter._prepare_reused_server_state = lambda: None
+    service = GenericAvService(adapter, name="pcla-wrapper", version="0.3.2")
+    context = SimpleNamespace(peer=lambda: "test")
+    request = init_request_to_proto(
+        InitRequest(
+            output_dir=tmp_path / "output",
+            dt=0.05,
+            config={
+                "pcla_root": str(root),
+                "pcla_agent": "carl_plant_3",
+                "launch_carla_server": False,
+            },
+        )
+    )
+
+    response = service.Init(request, context)
+
+    assert response.name == "carl_plant_3"
+    metadata = MessageToDict(response.metadata)
+    assert metadata["effective_config"]["pcla_agent"] == "carl_plant_3"
+    assert metadata["effective_config"]["launch_carla_server"] is False
+
+
+def test_init_failure_does_not_produce_success_response(tmp_path):
+    root = tmp_path / "PCLA"
+    write_agents(root)
+    adapter = PclaAV()
+    adapter._ensure_connected = lambda: (_ for _ in ()).throw(AvTimeout("unavailable"))
+
+    with pytest.raises(AvTimeout, match="unavailable"):
+        adapter.init(
+            SimpleNamespace(
+                output_dir=tmp_path / "output",
+                dt=0.05,
+                config={
+                    "pcla_root": str(root),
+                    "pcla_agent": "carl_plant_3",
+                    "launch_carla_server": False,
+                },
+            )
+        )
+
+    assert adapter._initialized is False
 
 
 def test_string_false_disables_owned_carla_launch(tmp_path):
