@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly ARCHIVE_URL="${PCLA_WEIGHTS_URL:-https://huggingface.co/datasets/MasoudJTehrani/PCLA/resolve/main/pretrained.zip}"
 readonly ARCHIVE_SHA256="${PCLA_WEIGHTS_SHA256:-0d02c1aaf9ea81b892fef8815c1a8ab617c1906b89ee984ba8163332d659fa93}"
-readonly DESTINATION="${1:-/opt/pisa/weights}"
+readonly DESTINATION="${1:-${PISA_DATA_DIR:-/PISA_DATA_DIR}/weights}"
 readonly ARCHIVE="${PCLA_WEIGHTS_ARCHIVE:-/tmp/pcla_weights.zip}"
 
 command -v curl >/dev/null
