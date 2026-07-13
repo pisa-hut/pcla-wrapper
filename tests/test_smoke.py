@@ -570,6 +570,33 @@ def test_plant_route_planner_uses_world_coordinates():
     assert "downsample_route(global_plan_world_coord, 50)" in source
     assert "downsample_route(global_plan_world_coord, 200)" not in source
     assert "PlanT state step=%d" in source
+    assert "inital_frames_delay" not in source
+    assert 'cfg.get("initial_control_delay_seconds", 0.0)' in source
+    assert "self.step <= self.initial_control_delay_steps" in source
+
+    eval_config = Path("PCLA/pcla_agents/plant/config/eval.yaml").read_text(encoding="utf-8")
+    assert "initial_control_delay_seconds: 0.0" in eval_config
+
+
+def test_plant_initial_control_delay_converts_seconds_to_ticks():
+    path = Path("PCLA/pcla_agents/plant/PlanT_agent.py")
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_initial_control_delay_steps"
+    )
+    namespace = {"math": math}
+    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    exec(compile(module, str(path), "exec"), namespace)
+    delay_steps = namespace["_initial_control_delay_steps"]
+
+    assert delay_steps(0.0, 0.05) == (0.0, 0)
+    assert delay_steps(2.0, 0.05) == (2.0, 40)
+    assert delay_steps(0.01, 0.05) == (0.01, 1)
+    for invalid_delay in (-0.1, float("inf"), True, "invalid"):
+        with pytest.raises(ValueError, match="non-negative number"):
+            delay_steps(invalid_delay, 0.05)
 
 
 def test_plant_privileged_route_index_tracks_actual_prefix():
