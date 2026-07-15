@@ -58,11 +58,14 @@ To download the upstream PCLA weight archive for a local PISA host, run:
 scripts/download_pcla_weights.sh "${PISA_DATA_DIR:-/PISA_DATA_DIR}/weights"
 ```
 
-For the default `pcla` AV, set `weight_path` to
-`weights/plant_pretrained`. The executor resolves that under `PISA_DATA_DIR`
-and mounts `${PISA_DATA_DIR}/weights/plant_pretrained` into the AV container as
-`/mnt/weights`. CI and image builds do not run this download script; they build
-the runtime image without model weights.
+For the default `pcla` AV, set `weight_path` to `weights/plant_pretrained`.
+The executor resolves that under `PISA_DATA_DIR` and mounts the selected
+directory into the AV container as `/mnt/weights`. A common-profile root that
+contains `plant_pretrained`, `plant2_pretrained`, and `carl_pretrained` may also
+be mounted there; the wrapper detects both layouts without modifying the image
+filesystem. CI and image builds do
+not run this download script; they build the runtime image without model
+weights.
 
 ## Run
 

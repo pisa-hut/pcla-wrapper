@@ -41,7 +41,6 @@ values, Init fails with `InvalidAvRequest`.
 | `route_waypoint_distance` | `2.0` | Route planner sampling distance in meters. |
 | `route_draw` | `false` | Draw route debug markers in CARLA. |
 | `action_none_timeout_seconds` | `0.0` | Retry window when PCLA returns no action. |
-| `debug_log_interval_steps` | `20` | Driving-state debug log interval; `0` disables these debug logs. |
 
 `route_xml_path` is resolved relative to `pcla_root` unless it is absolute.
 Generated routes are written below

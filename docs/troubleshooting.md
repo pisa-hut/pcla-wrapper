@@ -16,21 +16,6 @@ CARLA mode=external endpoint=127.0.0.1:2000
 For an external server, this must say `external` and the log must not contain
 `Launched owned CARLA server process`.
 
-Every Reset logs route coordinates before planning:
-
-```text
-Reset route endpoints scenario='case' PISA start=(...) goal=(...) CARLA start=(...) goal=(...)
-Projected route endpoints scenario='case' start=(...) goal=(...)
-```
-
-The first line shows the request coordinates and the result after applying
-`coordinate_y_sign`. The second line shows the road waypoints selected by
-CARLA's `project_to_road` operation.
-
-The first three Step calls and every `debug_log_interval_steps` calls also log
-the PISA observation, shadow CARLA actor state, route heading/error, and
-raw/output control. Set the interval to `1` for frame-by-frame diagnosis or `0`
-to disable it.
 - no other process occupies the selected CARLA port.
 - `<output_dir>/carla_server/stderr.log` for internal-server failures.
 - `carla_connect_timeout_seconds` is long enough for the host.

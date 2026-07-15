@@ -11,19 +11,19 @@
         "plant2_pretrained/epoch=029_final_2.ckpt"
       ],
       "carl_plant_0": [
-        "plant_pretrained/last-v3.ckpt"
+        "plant_pretrained/last.ckpt"
       ],
       "carl_plant_1": [
-        "plant_pretrained/last-v3.ckpt"
+        "plant_pretrained/last-v1.ckpt"
       ],
       "carl_plant_2": [
-        "plant_pretrained/last-v3.ckpt"
+        "plant_pretrained/last-v2.ckpt"
       ],
       "carl_plant_3": [
         "plant_pretrained/last-v3.ckpt"
       ],
       "carl_plant_4": [
-        "plant_pretrained/last-v3.ckpt"
+        "plant_pretrained/last-v4.ckpt"
       ],
       "carl_carl_0": [
         "carl_pretrained/CaRL_PY_0_0/config.json",

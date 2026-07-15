@@ -2,10 +2,32 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from pisa_api.av import InvalidAvRequest
+
+
+def isolate_profile_import_paths(pcla_root: Path) -> None:
+    """Remove private dependency paths for agents excluded from the active image profile."""
+    if os.environ.get("PCLA_IMAGE_PROFILE") != "common":
+        return
+
+    lmdrive_path = (pcla_root / "pcla_agents" / "lmdrive" / "vision_encoder").resolve()
+    sys.path[:] = [entry for entry in sys.path if Path(entry or ".").resolve() != lmdrive_path]
+
+    # Also recover cleanly if a previous agent import failed partway through
+    # LMDrive's private timm package before profile isolation ran.
+    for name, module in list(sys.modules.items()):
+        module_file = getattr(module, "__file__", None)
+        if module_file is None:
+            continue
+        try:
+            Path(module_file).resolve().relative_to(lmdrive_path)
+        except ValueError:
+            continue
+        del sys.modules[name]
 
 
 def load_agent_profiles() -> dict[str, Any]:

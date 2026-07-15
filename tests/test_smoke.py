@@ -4,6 +4,7 @@ import importlib.util
 import inspect
 import json
 import math
+import os
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -36,8 +37,9 @@ from pisa_api.empty_pb2 import Empty
 from pcla_wrapper import version as version_module
 from pcla_wrapper.lifecycle import clear_dynamic_actors
 from pcla_wrapper.pcla_av import PclaAV
-from pcla_wrapper.profiles import validate_image_profile
+from pcla_wrapper.profiles import isolate_profile_import_paths, validate_image_profile
 from pcla_wrapper.version import wrapper_version
+from pcla_wrapper.weights import install_give_path_resolver, resolve_weight_path
 
 
 class FakeLocation:
@@ -105,6 +107,7 @@ class FakeActor:
         self.is_alive = True
         self.destroy_calls = 0
         self.transforms = []
+        self.controls = []
         self.physics_calls = []
         self.gravity_calls = []
         self.bounding_box = SimpleNamespace(
@@ -126,6 +129,14 @@ class FakeActor:
 
     def set_target_angular_velocity(self, velocity):
         self.angular_velocity = velocity
+
+    def apply_control(self, control):
+        self.controls.append(control)
+
+    def get_control(self):
+        if self.controls:
+            return self.controls[-1]
+        return SimpleNamespace(throttle=0.0, brake=0.0, steer=0.0, gear=0)
 
     def set_simulate_physics(self, enabled):
         self.physics_calls.append(enabled)
@@ -388,7 +399,6 @@ def test_canonical_config_example_contains_current_keys_only():
     for key in (
         "pcla_agent",
         "pcla_pretrained_root",
-        "debug_log_interval_steps",
         "carla_server_script",
         "carla_host",
         "carla_port",
@@ -484,9 +494,69 @@ def test_no_weight_bundling_image_build_path():
     assert "simlingo_simlingo" not in profiles["common"]["agents"]
 
 
+def test_plant_profile_maps_each_seed_to_its_checkpoint():
+    agents = json.loads(Path("pcla_wrapper/agent_profiles.json").read_text(encoding="utf-8"))[
+        "common"
+    ]["agents"]
+
+    assert agents["carl_plant_0"] == ["plant_pretrained/last.ckpt"]
+    for seed in range(1, 5):
+        assert agents[f"carl_plant_{seed}"] == [f"plant_pretrained/last-v{seed}.ckpt"]
+
+
+def test_weight_path_selects_nested_directory_from_profile_root(tmp_path):
+    pretrained_root = tmp_path / "weights"
+    pcla_root = tmp_path / "PCLA"
+    checkpoint = pretrained_root / "plant2_pretrained" / "model.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+
+    resolved = resolve_weight_path(
+        str(pcla_root / "pcla_agents" / "plant2_pretrained" / "model.ckpt"),
+        pcla_root,
+        pretrained_root,
+    )
+
+    assert resolved == str(checkpoint)
+
+
+def test_weight_path_selects_direct_directory_mount(tmp_path):
+    pretrained_root = tmp_path / "selected_weights"
+    pretrained_root.mkdir()
+    checkpoint = pretrained_root / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    pcla_root = tmp_path / "PCLA"
+
+    resolved = resolve_weight_path(
+        str(pcla_root / "pcla_agents" / "plant2_pretrained" / "model.ckpt"),
+        pcla_root,
+        pretrained_root,
+    )
+
+    assert resolved == str(checkpoint)
+
+
+def test_give_path_resolver_updates_plant2_checkpoint_without_writing_image(tmp_path):
+    pcla_root = tmp_path / "PCLA"
+    pretrained_root = tmp_path / "weights"
+    checkpoint = pretrained_root / "plant2_pretrained" / "model.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    original_path = pcla_root / "pcla_agents" / "plant2_pretrained" / "model.ckpt"
+    module = SimpleNamespace(give_path=lambda *_: (str(pcla_root / "agent.py"), str(original_path)))
+
+    install_give_path_resolver(module, pretrained_root)
+    agent_path, config_path = module.give_path("plant2_plant2_0", str(pcla_root), "")
+
+    assert agent_path == str(pcla_root / "agent.py")
+    assert config_path == str(checkpoint)
+    assert os.environ["PLANT_CHECKPOINT"] == str(checkpoint)
+
+
 def test_entrypoint_allows_runtime_validation_commands():
     entrypoint = Path("entrypoint.sh").read_text(encoding="utf-8")
 
+    assert "pcla_wrapper.weights" not in entrypoint
     assert 'if (( $# > 0 )); then\n    exec "$@"\nfi' in entrypoint
     assert "exec /opt/pcla-venv/bin/python -m pcla_wrapper.server" in entrypoint
 
@@ -563,13 +633,29 @@ def test_common_profile_reports_missing_selected_agent_weights(monkeypatch, tmp_
         validate_image_profile("plant2_plant2_0", tmp_path)
 
 
+def test_common_profile_removes_lmdrive_private_timm_path(monkeypatch, tmp_path):
+    pcla_root = tmp_path / "PCLA"
+    private_path = pcla_root / "pcla_agents" / "lmdrive" / "vision_encoder"
+    private_path.mkdir(parents=True)
+    fake_module_path = private_path / "timm" / "__init__.py"
+    fake_module = ModuleType("pcla_test_private_timm")
+    fake_module.__file__ = str(fake_module_path)
+    monkeypatch.setitem(sys.modules, fake_module.__name__, fake_module)
+    monkeypatch.setattr(sys, "path", [str(private_path), *sys.path])
+    monkeypatch.setenv("PCLA_IMAGE_PROFILE", "common")
+
+    isolate_profile_import_paths(pcla_root)
+
+    assert str(private_path) not in sys.path
+    assert fake_module.__name__ not in sys.modules
+
+
 def test_plant_route_planner_uses_world_coordinates():
     source = Path("PCLA/pcla_agents/plant/PlanT_agent.py").read_text(encoding="utf-8")
     assert "set_route(self._global_plan_world_coord, False)" in source
     assert "set_route(self._global_plan, True)" not in source
     assert "downsample_route(global_plan_world_coord, 50)" in source
     assert "downsample_route(global_plan_world_coord, 200)" not in source
-    assert "PlanT state step=%d" in source
     assert "inital_frames_delay" not in source
     assert 'cfg.get("initial_control_delay_seconds", 0.0)' in source
     assert "self.step <= self.initial_control_delay_steps" in source
@@ -597,6 +683,33 @@ def test_plant_initial_control_delay_converts_seconds_to_ticks():
     for invalid_delay in (-0.1, float("inf"), True, "invalid"):
         with pytest.raises(ValueError, match="non-negative number"):
             delay_steps(invalid_delay, 0.05)
+
+
+def test_carl_stop_sign_check_skips_expensive_waypoints_when_irrelevant():
+    source = Path("PCLA/pcla_agents/carl/birds_eye_view/run_stop_sign.py").read_text(
+        encoding="utf-8"
+    )
+
+    no_sign_fast_path = source.index("if not self.list_stop_signs:")
+    actor_transform = source.index("actor_transform = vehicle.get_transform()", no_sign_fast_path)
+    waypoint_generation = source.index("check_wps = self.get_waypoints(vehicle)", actor_transform)
+    proximity_fast_path = source.index("if not self.target_stop_sign and all(", actor_transform)
+
+    assert no_sign_fast_path < actor_transform < proximity_fast_path < waypoint_generation
+    assert "self.stop_sign_locations.append(stop_location)" in source
+
+
+def test_roach_bev_warps_a_local_crop_instead_of_the_full_map():
+    source = Path("PCLA/pcla_agents/carl/birds_eye_view/chauffeurnet.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def warp_affine_local_crop(image, transform, output_width):" in source
+    assert "inverse_transform = cv.invertAffineTransform(transform)" in source
+    assert "cropped = np.ascontiguousarray(image[y0:y1, x0:x1])" in source
+    assert "local_transform[:, 2] +=" in source
+    assert "warp_affine_local_crop(self.hd_map_array, m_warp, self._width)" in source
+    assert "cv.warpAffine(self.hd_map_array" not in source
 
 
 def test_plant_privileged_route_index_tracks_actual_prefix():
@@ -778,7 +891,6 @@ def test_init_parses_request_without_loading_models(tmp_path):
             "yaw_offset_deg": 0.0,
             "action_none_timeout_seconds": 0.0,
             "sensor_warmup_ticks": 1,
-            "debug_log_interval_steps": 20,
         }
     }
     struct = Struct()
@@ -1208,17 +1320,13 @@ def test_generated_route_logs_raw_converted_and_projected_endpoints(tmp_path, ca
             goal_config=SimpleNamespace(position=kinematic(x=10, y=6, z=1)),
         ),
     )
-    with caplog.at_level("INFO", logger="pcla_wrapper.pcla_av"):
-        route = adapter._resolve_route_path(
-            scenario,
-            observation(object_state(kinematic=kinematic(x=2, y=4, z=1))),
-        )
+    route = adapter._resolve_route_path(
+        scenario,
+        observation(object_state(kinematic=kinematic(x=2, y=4, z=1))),
+    )
     assert route.parent == tmp_path / "case-a" / "pcla_routes"
     assert ".." not in route.name
     assert route.read_text(encoding="utf-8") == "<route/>"
-    assert "PISA start=(2.000, 4.000, 1.000) goal=(10.000, 6.000, 1.000)" in caplog.text
-    assert "CARLA start=(2.000, -4.000, 1.000) goal=(10.000, -6.000, 1.000)" in caplog.text
-    assert "Projected route endpoints" in caplog.text
 
     adapter._pcla_module.location_to_waypoint = lambda *args, **kwargs: []
     with pytest.raises(AvPreconditionFailed, match="fewer than two"):
@@ -1298,28 +1406,6 @@ def test_camera_sensor_enables_rendering_and_warms_up():
     assert adapter._world.tick_calls == 2
 
 
-def test_driving_state_log_includes_heading_and_converted_steer(caplog):
-    adapter = configured_adapter()
-    adapter._debug_log_interval_steps = 20
-    adapter._step_count = 1
-    adapter._last_timestamp_ns = 123
-    adapter._steer_sign = -1.0
-    adapter._route_start_location = FakeLocation(0, 0, 0)
-    adapter._route_goal_location = FakeLocation(100, 0, 0)
-    adapter._vehicle.transform = FakeTransform(FakeLocation(5, 0, 0), FakeRotation(yaw=10))
-    adapter._vehicle.velocity = FakeVector(3, 4, 0)
-    adapter._vehicle.get_transform = lambda: adapter._vehicle.transform
-    adapter._vehicle.get_velocity = lambda: adapter._vehicle.velocity
-    action = SimpleNamespace(throttle=0.5, brake=0.0, steer=0.25)
-
-    with caplog.at_level("DEBUG", logger="pcla_wrapper.pcla_av"):
-        adapter._log_driving_state(kinematic(x=5, yaw=0.1, speed=5), action)
-
-    assert "heading_error_deg=-10.000" in caplog.text
-    assert "speed=5.000" in caplog.text
-    assert "output_steer=-0.250" in caplog.text
-
-
 def test_sensor_warmup_reports_owned_server_exit():
     adapter = configured_adapter()
     adapter._sensor_warmup_ticks = 1
@@ -1383,9 +1469,10 @@ def test_tracking_ids_preserve_identity_across_reorder_and_remove_disappeared():
     adapter._update_and_tick(observation(ego, [second, first]))
     assert adapter._other_actors_by_key[10] is actor
     assert adapter._other_actors_by_key[20] is second_actor
-    assert actor.physics_calls[-1] is False
-    assert actor.gravity_calls[-1] is False
-    assert adapter._vehicle.physics_calls == []
+    assert actor.physics_calls[-1] is True
+    assert actor.gravity_calls[-1] is True
+    assert adapter._vehicle.physics_calls == [True, True]
+    assert adapter._vehicle.gravity_calls == [True, True]
 
     changed = observed_agent(object_state(1, RoadObjectType.PEDESTRIAN), tracking_id=10)
     adapter._update_and_tick(observation(ego, [changed]))
@@ -1430,6 +1517,37 @@ def test_agent_order_does_not_change_ego_pose():
     adapter._update_and_tick(observation(ego, agents))
     adapter._update_and_tick(observation(ego, reversed(agents)))
     assert [transform.location.x for transform in adapter._vehicle.transforms] == [50.0, 50.0]
+
+
+def test_shadow_ego_keeps_physics_enabled_for_velocity_observation():
+    adapter = configured_adapter()
+    ego = object_state(37)
+
+    adapter._update_and_tick(observation(ego))
+
+    assert adapter._world.tick_calls == 1
+    assert [transform.location.x for transform in adapter._vehicle.transforms] == [37.0]
+    assert adapter._vehicle.physics_calls == [True]
+    assert adapter._vehicle.gravity_calls == [True]
+
+
+def test_step_applies_output_control_to_shadow_ego_for_next_observation():
+    adapter = configured_adapter()
+    action = SimpleNamespace(throttle=0.7, brake=0.2, steer=0.3, gear=1)
+    adapter._pcla = SimpleNamespace(get_action=lambda snapshot=None: action)
+    adapter._data_provider = None
+
+    response = adapter.step(SimpleNamespace(observation=observation(), timestamp_ns=0))
+
+    assert response.ctrl_cmd.payload == {
+        "throttle": 0.0,
+        "brake": 0.2,
+        "steer": 0.3,
+    }
+    assert adapter._vehicle.get_control() is action
+    assert action.throttle == 0.0
+    assert action.brake == 0.2
+    assert action.steer == 0.3
 
 
 def test_shape_center_and_actor_origin_offsets_are_composed():

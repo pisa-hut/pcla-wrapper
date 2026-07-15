@@ -21,12 +21,20 @@ def main() -> int:
     pcla_root = args.pcla_root.resolve()
     sys.path.insert(0, str(pcla_root))
 
-    from pcla_functions.give_path import give_path
+    import PCLA as pcla_module
+    from pcla_wrapper.profiles import isolate_profile_import_paths, validate_image_profile
+    from pcla_wrapper.weights import resolve_give_path_result
 
-    from pcla_wrapper.profiles import validate_image_profile
-
+    isolate_profile_import_paths(pcla_root)
     validate_image_profile(args.agent, Path(os.environ["PCLA_PRETRAINED_ROOT"]))
-    agent_path, config_path = give_path(args.agent, str(pcla_root), "")
+    agent_path, config_path = pcla_module.give_path(args.agent, str(pcla_root), "")
+    agent_path, config_path = resolve_give_path_result(
+        args.agent,
+        pcla_root,
+        Path(os.environ["PCLA_PRETRAINED_ROOT"]),
+        agent_path,
+        config_path,
+    )
     module_dir = str(Path(agent_path).parent)
     sys.path.insert(0, module_dir)
 

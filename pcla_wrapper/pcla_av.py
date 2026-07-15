@@ -40,7 +40,8 @@ from pisa_api.av import (
 )
 
 from .lifecycle import clear_dynamic_actors, destroy_actor, force_async_world_for_cleanup
-from .profiles import validate_image_profile
+from .profiles import isolate_profile_import_paths, validate_image_profile
+from .weights import install_give_path_resolver
 
 logger = logging.getLogger(__name__)
 PCLA_CWD_LOCK = RLock()
@@ -221,13 +222,13 @@ class PclaAV:
                 raise AvPreconditionFailed(message)
 
             payload = self._normalize_control(action)
+            self._apply_shadow_control(action, payload)
 
             if hasattr(self._pcla, "done") and self._pcla.done():
                 self._quit_flag = True
                 self._quit_msg = "PCLA agent reached the route endpoint."
             self._step_count += 1
             self._expected_timestamp_ns += self._dt_ns
-            self._log_driving_state(observation.ego.kinematic, action)
             return StepResponse(
                 ctrl_cmd=ControlCommand(
                     mode=ControlMode.THROTTLE_STEER_BREAK,
@@ -450,6 +451,23 @@ class PclaAV:
             throttle = 0.0
         return {"throttle": throttle, "brake": brake, "steer": steer}
 
+    def _apply_shadow_control(self, action: Any, payload: dict[str, float]) -> None:
+        """Keep the shadow ego's previous-control state aligned with PISA.
+
+        PCLA returns a CARLA-domain control while the wrapper sends a
+        handedness-adjusted copy to PISA.  State-based agents such as Roach and
+        CaRL read ``vehicle.get_control()`` as part of their next observation,
+        so the raw CARLA steer must be retained on the shadow actor.  Throttle
+        follows the wrapper's brake-priority normalization because that is the
+        command PISA actually receives.
+        """
+        try:
+            action.throttle = payload["throttle"]
+            action.brake = payload["brake"]
+            self._vehicle.apply_control(action)
+        except Exception as exc:
+            raise AvUnavailable("Failed to apply the previous control to the shadow ego") from exc
+
     def _normalize_config(self, raw: dict[str, Any]) -> dict[str, Any]:
         config = dict(raw)
         nested_pcla = config.pop("pcla", None)
@@ -612,9 +630,6 @@ class PclaAV:
         self._sensor_warmup_ticks = self._config_int("sensor_warmup_ticks", 1)
         if self._sensor_warmup_ticks < 0:
             raise InvalidAvRequest("sensor_warmup_ticks must be non-negative")
-        self._debug_log_interval_steps = self._config_int("debug_log_interval_steps", 20)
-        if self._debug_log_interval_steps < 0:
-            raise InvalidAvRequest("debug_log_interval_steps must be non-negative")
 
     def _effective_config(self) -> dict[str, Any]:
         return {
@@ -633,7 +648,6 @@ class PclaAV:
             "yaw_offset_deg": self._yaw_offset_deg,
             "action_none_timeout_seconds": self._action_none_timeout,
             "sensor_warmup_ticks": self._sensor_warmup_ticks,
-            "debug_log_interval_steps": self._debug_log_interval_steps,
         }
 
     @staticmethod
@@ -772,6 +786,8 @@ class PclaAV:
             import PCLA
         except Exception as exc:
             raise AvUnavailable(f"Failed to import PCLA from {self._pcla_root}") from exc
+        isolate_profile_import_paths(self._pcla_root)
+        install_give_path_resolver(PCLA, self._pretrained_root)
         self._pcla_module = PCLA
         self._data_provider = CarlaDataProvider
 
@@ -1156,6 +1172,10 @@ class PclaAV:
         if ego is None:
             raise AvPreconditionFailed("Failed to spawn ego vehicle")
         self._spawned_actor_ids.add(ego.id)
+        # Keep ego physics enabled so CARLA publishes a meaningful velocity
+        # after the observation tick.  Other observation actors remain
+        # kinematic; their authoritative velocity will be handled separately
+        # by the shadow-state compatibility layer.
         self._apply_state(ego, observation.ego)
         return ego
 
@@ -1179,19 +1199,8 @@ class PclaAV:
     ) -> Path:
         raw_start = self._get_spawn_position(observation, scenario)
         raw_goal = self._get_goal_position(scenario)
-        start_xyz = self._extract_xyz(raw_start)
-        goal_xyz = self._extract_xyz(raw_goal)
         start = self._to_carla_location(raw_start)
         goal = self._to_carla_location(raw_goal)
-        logger.info(
-            "Reset route endpoints scenario=%r PISA start=(%.3f, %.3f, %.3f) "
-            "goal=(%.3f, %.3f, %.3f) CARLA start=%s goal=%s",
-            scenario.name,
-            *start_xyz,
-            *goal_xyz,
-            self._format_xyz(start),
-            self._format_xyz(goal),
-        )
 
         if self._route_path_cfg:
             path = Path(self._route_path_cfg)
@@ -1216,12 +1225,6 @@ class PclaAV:
                 "Failed to project route endpoints onto the CARLA map: "
                 f"start={self._format_xyz(start)}, goal={self._format_xyz(goal)}"
             )
-        logger.info(
-            "Projected route endpoints scenario=%r start=%s goal=%s",
-            scenario.name,
-            self._format_xyz(start_wp.transform.location),
-            self._format_xyz(goal_wp.transform.location),
-        )
         self._route_start_location = start_wp.transform.location
         self._route_goal_location = goal_wp.transform.location
         try:
@@ -1264,57 +1267,6 @@ class PclaAV:
                 with contextlib.suppress(FileNotFoundError):
                     temp_path.unlink()
         return route_path
-
-    @staticmethod
-    def _normalize_degrees(angle: float) -> float:
-        return (angle + 180.0) % 360.0 - 180.0
-
-    def _log_driving_state(self, kinematic: Any, action: Any) -> None:
-        interval = getattr(self, "_debug_log_interval_steps", 20)
-        if interval == 0 or (self._step_count > 3 and self._step_count % interval != 0):
-            return
-        try:
-            transform = self._vehicle.get_transform()
-            velocity = self._vehicle.get_velocity()
-        except Exception:
-            logger.debug(
-                "Unable to collect shadow CARLA actor state for diagnostics", exc_info=True
-            )
-            return
-        actor_speed = math.sqrt(
-            float(velocity.x) ** 2 + float(velocity.y) ** 2 + float(velocity.z) ** 2
-        )
-        route_heading = None
-        heading_error = None
-        if self._route_start_location is not None and self._route_goal_location is not None:
-            route_heading = math.degrees(
-                math.atan2(
-                    self._route_goal_location.y - self._route_start_location.y,
-                    self._route_goal_location.x - self._route_start_location.x,
-                )
-            )
-            heading_error = self._normalize_degrees(route_heading - transform.rotation.yaw)
-        logger.debug(
-            "Driving state step=%d timestamp_ns=%d "
-            "PISA pose=(%.3f, %.3f, %.3f) yaw_rad=%.6f speed=%.3f "
-            "CARLA pose=%s yaw_deg=%.3f speed=%.3f "
-            "route_heading_deg=%s heading_error_deg=%s "
-            "control_raw=(throttle=%.3f brake=%.3f steer=%.3f) output_steer=%.3f",
-            self._step_count,
-            self._last_timestamp_ns,
-            *self._extract_xyz(kinematic),
-            float(kinematic.yaw),
-            float(kinematic.speed),
-            self._format_xyz(transform.location),
-            float(transform.rotation.yaw),
-            actor_speed,
-            "n/a" if route_heading is None else f"{route_heading:.3f}",
-            "n/a" if heading_error is None else f"{heading_error:.3f}",
-            float(action.throttle),
-            float(action.brake),
-            float(action.steer),
-            float(action.steer) / self._steer_sign,
-        )
 
     def _build_pcla(self, route_path: Path):
         self._ensure_pcla_imports()
@@ -1394,6 +1346,12 @@ class PclaAV:
             actor.set_simulate_physics(False)
         with contextlib.suppress(Exception):
             actor.set_enable_gravity(False)
+
+    def _make_observation_actor_dynamic(self, actor: Any) -> None:
+        with contextlib.suppress(Exception):
+            actor.set_simulate_physics(True)
+        with contextlib.suppress(Exception):
+            actor.set_enable_gravity(True)
 
     @staticmethod
     def _rotation_matrix(roll_deg: float, pitch_deg: float, yaw_deg: float):
@@ -1502,6 +1460,8 @@ class PclaAV:
     def _apply_state(self, actor: Any, state: ObjectStateData, *, kinematic: bool = False) -> None:
         if kinematic:
             self._make_observation_actor_kinematic(actor)
+        else:
+            self._make_observation_actor_dynamic(actor)
         actor.set_transform(self._object_transform(state, actor))
         kin = state.kinematic
         yaw = self._to_carla_yaw(float(kin.yaw))
@@ -1548,7 +1508,7 @@ class PclaAV:
                     raise AvPreconditionFailed("Failed to spawn stateless observation actor")
                 self._spawned_actor_ids.add(actor.id)
                 self._stateless_other_actors.append(actor)
-                self._apply_state(actor, obj, kinematic=True)
+                self._apply_state(actor, obj)
         else:
             if not self._using_tracking_ids:
                 self._destroy_other_actors()
@@ -1579,7 +1539,7 @@ class PclaAV:
                     self._spawned_actor_ids.add(actor.id)
                     self._other_actors_by_key[key] = actor
                     self._other_actor_types_by_key[key] = obj.type
-                self._apply_state(actor, obj, kinematic=True)
+                self._apply_state(actor, obj)
 
             for key in set(self._other_actors_by_key) - observed_keys:
                 actor = self._other_actors_by_key.pop(key)
@@ -1592,6 +1552,7 @@ class PclaAV:
             self._world.tick()
         else:
             self._world.wait_for_tick()
+
         return self._world.get_snapshot()
 
     def _destroy_other_actors(self) -> None:

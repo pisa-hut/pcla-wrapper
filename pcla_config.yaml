@@ -39,10 +39,6 @@ route_draw: false
 # wall-clock seconds. 0 fails immediately without retrying or ticking CARLA.
 action_none_timeout_seconds: 0.0
 
-# Emit detailed driving-state DEBUG logs for steps 1-3 and then every N steps.
-# Set 1 for every step or 0 to disable these logs.
-debug_log_interval_steps: 20
-
 # ---------------------------------------------------------------------------
 # CARLA process, connection, and local Python API
 # ---------------------------------------------------------------------------

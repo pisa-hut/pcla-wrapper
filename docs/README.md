@@ -7,6 +7,8 @@ service.
   compatibility behavior.
 - [Agents and weights](agents.md): agent naming, registry lookup, route
   dependencies, and weight placement.
+- [State-based agents](state-based-agents.md): agents that need no camera,
+  LiDAR, or radar input, their observations, and the shadow-CARLA boundary.
 - [Deployment](deployment.md): image contract, volumes, internal/external
   CARLA modes, and startup examples.
 - [Lifecycle](lifecycle.md): ownership and execution order for Init, Reset,
