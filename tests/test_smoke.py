@@ -720,6 +720,16 @@ def test_plant_privileged_route_index_tracks_actual_prefix():
     assert "self.route_index += self.points_per_meter" in source
 
 
+def test_plant_loads_hf_config_from_mounted_checkpoint_directory():
+    agent = Path("PCLA/pcla_agents/plant/PlanT_agent.py").read_text(encoding="utf-8")
+    model = Path("PCLA/pcla_agents/plant/model.py").read_text(encoding="utf-8")
+
+    assert 'os.environ["PLANT_CHECKPOINT"] = LOAD_CKPT_PATH' in agent
+    assert 'checkpoint_path = os.environ.get("PLANT_CHECKPOINT")' in model
+    assert "Path(checkpoint_path).parent" in model
+    assert "local_files_only=bool(checkpoint_path)" in model
+
+
 def test_plant_planners_compute_dynamic_opendrive_speed_limits():
     for agent in ("plant", "plant2"):
         source = Path(
