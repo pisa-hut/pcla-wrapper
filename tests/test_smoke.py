@@ -727,6 +727,7 @@ def test_plant_loads_hf_config_from_mounted_checkpoint_directory():
     assert 'os.environ["PLANT_CHECKPOINT"] = LOAD_CKPT_PATH' in agent
     assert 'checkpoint_path = os.environ.get("PLANT_CHECKPOINT")' in model
     assert "Path(checkpoint_path).parent" in model
+    assert "config = BertConfig.from_pretrained(" in model
     assert "local_files_only=bool(checkpoint_path)" in model
 
 
